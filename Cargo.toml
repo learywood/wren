@@ -1,0 +1,17 @@
+[package]
+name = "wren"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+description = "An agent harness."
+repository = "https://github.com/learywood/wren"
+publish = false
+
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
