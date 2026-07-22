@@ -16,9 +16,11 @@ Keep documentation close to demonstrated needs; do not add speculative documents
 
 ## GitHub Issues Workflow
 
-- Drive every task through a GitHub issue.
+- Use GitHub issues for feature work, bug fixes, and other substantive code changes.
 - Create a new issue before starting any new feature.
-- Keep implementation scoped to the issue and link resulting work back to it.
+- Small conversational tasks, including adding or modifying documentation, do not require an issue.
+- Do not create an issue solely to track a small conversational task.
+- For issue work, keep implementation scoped to the issue and link resulting work back to it.
 - Treat a request to start work on an issue as a request to complete it through implementation, validation, merge, and issue closure.
 - When human verification is required, stop before merging and clearly request that verification.
 - Open a follow-up issue rather than silently expanding scope.
@@ -33,9 +35,9 @@ Communicate with brevity: be direct, lead with the outcome, omit unnecessary rec
 
 GPT-5.6 models tend toward completionism, over-engineering, and over-specification. Counteract this deliberately:
 
-- Make the smallest change that satisfies the issue.
+- Make the smallest change that satisfies the task.
 - Prefer the narrowest reasonable interpretation; do not infer unrequested requirements.
 - Avoid speculative abstractions, extensibility, documentation, and cleanup.
 - Expand specifications only when required to resolve a concrete ambiguity.
-- Do not consider or describe a feature as implemented until its changes are committed.
-- Do not continue beyond the acceptance criteria except to validate, merge, and close the issue.
+- Do not consider or describe a change as complete until it is committed.
+- Do not continue beyond the requested scope. For issue work, validate, merge, and close the issue once its acceptance criteria are met.
