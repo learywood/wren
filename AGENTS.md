@@ -4,6 +4,15 @@
 
 Wren is an agent harness for building and running software agents.
 
+## Platform Support
+
+Windows is Wren's only supported platform at this time.
+
+- Design, implement, test, and document workflows for Windows.
+- Do not add macOS or Linux support unless explicitly requested.
+- Do not substitute macOS or Linux results or infrastructure for Windows validation.
+- Agent workflows must run unattended from a standard non-elevated Windows session. Do not require UAC approval, administrator access, or other human interaction.
+
 ## Documentation
 
 All documentation belongs in `/docs/`:
