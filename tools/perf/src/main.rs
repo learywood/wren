@@ -75,7 +75,7 @@ fn print_help() {
     println!(
         "Wren performance tasks\n\n\
 Usage:\n  cargo perf <command>\n\n\
-Commands:\n  setup                         Install pinned performance tools under target/perf-tools\n  startup                       Measure startup of the release Wren harness\n  compare <baseline> <candidate> Compare two already-built harness binaries\n  profile-startup               Record a repeated-startup Samply profile\n  view-profile                  Open the recorded profile in the Samply UI\n  help                           Print this help\n\n\
+Commands:\n  setup                         Install pinned performance tools under target/perf-tools\n  startup                       Measure startup of the release Wren harness\n  compare <baseline> <candidate> Compare two already-built harness binaries\n  profile-startup               Record a repeated-startup Samply profile\n  view-profile                  Open the recorded profile in the platform UI\n  help                           Print this help\n\n\
 Tools:\n  hyperfine {HYPERFINE_VERSION}\n  samply    {SAMPLY_VERSION}"
     );
 }
@@ -204,6 +204,10 @@ fn profile_startup() -> Result<(), String> {
     let wren = profile_executable(&root, "profiling");
     let samply = require_tool(&root, "samply")?;
 
+    remove_if_present(&output)?;
+    #[cfg(target_os = "windows")]
+    remove_windows_profile_outputs(&output)?;
+
     let mut command = Command::new(samply);
     command
         .current_dir(&root)
@@ -216,29 +220,130 @@ fn profile_startup() -> Result<(), String> {
             "--profile-name",
             "Wren startup",
             "--main-thread-only",
+            "--reuse-threads",
             "--save-only",
             "--output",
         ])
-        .arg(output)
-        .arg("--")
-        .arg(wren);
-    run_checked(&mut command, "profile Wren startup")
+        .arg(&output);
+    #[cfg(target_os = "windows")]
+    command.arg("--keep-etl");
+    command.arg("--").arg(wren);
+    run_checked(&mut command, "profile Wren startup")?;
+
+    #[cfg(target_os = "windows")]
+    create_windows_profile_report(&root, &output)?;
+    Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
 fn view_profile() -> Result<(), String> {
     let root = repository_root();
     let profile = root.join("target/perf/startup-profile.json.gz");
-    if !profile.is_file() {
-        return Err(format!(
-            "profile `{}` does not exist; run `cargo perf profile-startup` first",
-            profile.display()
-        ));
-    }
+    require_file(&profile, "profile")?;
 
     let samply = require_tool(&root, "samply")?;
     let mut command = Command::new(samply);
     command.current_dir(&root).arg("load").arg(profile);
     run_checked(&mut command, "open the Wren startup profile")
+}
+
+#[cfg(target_os = "windows")]
+fn view_profile() -> Result<(), String> {
+    let root = repository_root();
+    let profile = root.join("target/perf/startup-profile.etl");
+    require_file(&profile, "Windows profile")?;
+
+    let wpa = windows_performance_tool("wpa")?;
+    let mut command = Command::new(wpa);
+    command.current_dir(&root).arg(profile);
+    run_checked(&mut command, "open the Wren startup profile")
+}
+
+#[cfg(target_os = "windows")]
+fn remove_windows_profile_outputs(profile: &Path) -> Result<(), String> {
+    for path in windows_profile_paths(profile) {
+        remove_if_present(&path)?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn create_windows_profile_report(root: &Path, profile: &Path) -> Result<(), String> {
+    let [kernel_trace, merged_trace, report] = windows_profile_paths(profile);
+    require_file(&kernel_trace, "Samply kernel trace")?;
+
+    let xperf = windows_performance_tool("xperf")?;
+    let mut merge = Command::new(&xperf);
+    merge
+        .current_dir(root)
+        .arg("-merge")
+        .arg(&kernel_trace)
+        .arg(&merged_trace);
+    run_checked(&mut merge, "merge the Windows startup trace")?;
+
+    let symbol_cache = root.join("target/perf/symcache");
+    fs::create_dir_all(&symbol_cache).map_err(|error| {
+        format!(
+            "failed to create symbol cache `{}`: {error}",
+            symbol_cache.display()
+        )
+    })?;
+
+    let mut report_command = Command::new(xperf);
+    report_command
+        .current_dir(root)
+        .env("_NT_SYMBOL_PATH", root.join("target/profiling"))
+        .env("_NT_SYMCACHE_PATH", symbol_cache)
+        .arg("-i")
+        .arg(&merged_trace)
+        .arg("-symbols")
+        .arg("-o")
+        .arg(&report)
+        .args(["-a", "profile", "-detail"]);
+    run_checked(
+        &mut report_command,
+        "create the symbolized Windows startup report",
+    )?;
+
+    println!("Windows startup profile report: `{}`", report.display());
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_profile_paths(profile: &Path) -> [PathBuf; 3] {
+    let directory = profile
+        .parent()
+        .expect("startup profile output must have a parent directory");
+    [
+        directory.join("startup-profile.kernel.etl"),
+        directory.join("startup-profile.etl"),
+        directory.join("startup-profile.txt"),
+    ]
+}
+
+#[cfg(target_os = "windows")]
+fn windows_performance_tool(name: &str) -> Result<PathBuf, String> {
+    let executable_name = format!("{name}.exe");
+    if let Some(path) = env::var_os("PATH").and_then(|path| {
+        env::split_paths(&path)
+            .map(|directory| directory.join(&executable_name))
+            .find(|candidate| candidate.is_file())
+    }) {
+        return Ok(path);
+    }
+
+    if let Some(program_files) = env::var_os("ProgramFiles(x86)") {
+        let path = PathBuf::from(program_files)
+            .join("Windows Kits/10/Windows Performance Toolkit")
+            .join(&executable_name);
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+
+    Err(format!(
+        "{executable_name} was not found; install the Windows Performance Toolkit"
+    ))
 }
 
 fn build_wren(root: &Path, profile: &str) -> Result<(), String> {
@@ -268,6 +373,25 @@ fn run_checked(command: &mut Command, description: &str) -> Result<(), String> {
     } else {
         Err(format!(
             "failed to {description}: process exited with {status}"
+        ))
+    }
+}
+
+fn remove_if_present(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("failed to remove `{}`: {error}", path.display())),
+    }
+}
+
+fn require_file(path: &Path, description: &str) -> Result<(), String> {
+    if path.is_file() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{description} `{}` does not exist; run `cargo perf profile-startup` first",
+            path.display()
         ))
     }
 }

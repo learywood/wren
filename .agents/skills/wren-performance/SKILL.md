@@ -71,7 +71,9 @@ Open the saved profile:
 cargo perf view-profile
 ```
 
-Inspect the call tree and flame graph for new or enlarged Wren, Rust runtime, loader, allocator, and system-library call paths. Samply reports sampled CPU activity; if wall-clock startup regresses without a corresponding CPU-path change, investigate off-CPU causes with the platform's tracing tools.
+On Windows, first read the symbolized `target/perf/startup-profile.txt`; the view command opens the merged ETL in Windows Performance Analyzer. On other platforms, it opens the Samply profile UI. The research document explains the Windows TDH compatibility fallback and all generated artifacts.
+
+Inspect the function report, call tree, and flame graph for new or enlarged Wren, Rust runtime, loader, allocator, and system-library call paths. Samply reports sampled CPU activity; if wall-clock startup regresses without a corresponding CPU-path change, investigate off-CPU causes with the platform's tracing tools.
 
 ## Report evidence
 

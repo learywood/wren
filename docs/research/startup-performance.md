@@ -85,6 +85,18 @@ cargo perf profile-startup
 cargo perf view-profile
 ```
 
-The first command builds Wren with the `profiling` Cargo profile, which retains release optimization and adds debug symbols. Samply samples 1,000 process launches at 10,000 Hz and saves `target/perf/startup-profile.json.gz`. The second command opens that artifact in the profiler UI for call-tree and flame-graph inspection.
+The first command builds Wren with the `profiling` Cargo profile, which retains release optimization and adds debug symbols. Samply requests a 10,000 Hz sampling rate across 1,000 process launches, merges equivalent non-overlapping threads, and saves `target/perf/startup-profile.json.gz`. The second command opens the appropriate profiler UI.
 
-Samply attributes sampled CPU activity; it does not replace the wall-clock benchmark. If elapsed startup regresses without a corresponding CPU call-path change, use platform tracing such as Windows Performance Analyzer, Linux `perf`, or Instruments to investigate I/O, scheduling, and other off-CPU causes.
+On Windows, the command also retains Samply's kernel trace, merges it, and uses `xperf` with Wren's PDB to create an agent-readable function report:
+
+```text
+target/perf/startup-profile.kernel.etl
+target/perf/startup-profile.etl
+target/perf/startup-profile.txt
+```
+
+Windows 11 24H2-era builds can exhibit the operating-system TDH regression tracked by [Samply #348](https://github.com/mstange/samply/issues/348), causing Samply's JSON to contain no samples even though the ETL trace contains them. On Windows, `cargo perf view-profile` therefore opens the merged ETL in Windows Performance Analyzer, and agents should read `startup-profile.txt` for symbolized function data. Other platforms open the Samply profile UI.
+
+The initial Windows 11 build 26200 validation exercised this fallback and resolved Wren frames including `wren.exe!main`, `std::env::args_os`, allocation, and Rust runtime initialization.
+
+Samply attributes sampled CPU activity; it does not replace the wall-clock benchmark. If elapsed startup regresses without a corresponding CPU call-path change, use platform tracing to investigate I/O, scheduling, and other off-CPU causes.
