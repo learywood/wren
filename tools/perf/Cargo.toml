@@ -1,0 +1,11 @@
+[package]
+name = "wren-perf"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Repository performance task runner for Wren."
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

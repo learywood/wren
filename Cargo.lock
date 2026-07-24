@@ -42,3 +42,7 @@ version = "0.1.0"
 dependencies = [
  "wren-extension",
 ]
+
+[[package]]
+name = "wren-perf"
+version = "0.1.0"
