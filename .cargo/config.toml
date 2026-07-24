@@ -1,0 +1,2 @@
+[alias]
+perf = "run --quiet --package wren-perf --"

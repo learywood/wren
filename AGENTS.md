@@ -14,6 +14,15 @@ All documentation belongs in `/docs/`:
 
 Keep documentation close to demonstrated needs; do not add speculative documents.
 
+## Performance Backpressure
+
+For changes that may affect startup or performance-sensitive runtime paths:
+
+- Load the `wren-performance` skill.
+- Measure the real release harness before and after the change.
+- Investigate meaningful regressions with the documented profiler workflow.
+- Do not merge an unexplained performance regression.
+
 ## GitHub Issues Workflow
 
 - Use GitHub issues for feature work, bug fixes, and other substantive code changes.
