@@ -1,23 +1,19 @@
 # Startup performance
 
-Wren uses external tools to separate user-visible process measurement from function-level diagnosis:
+Wren separates complete-process measurement from function-level diagnosis:
 
-- Hyperfine 1.20.0 measures the complete, uninstrumented release process.
-- Samply 0.13.1 records sampled call stacks from an optimized build with debug symbols.
+- Hyperfine 1.20.0 measures the uninstrumented release process.
+- Tracy 0.13.1 records explicit scopes and values from an optimized profiling build.
 
-Neither tool is a Wren runtime dependency. Repository commands pin and invoke them without implementing timing, statistics, or profiling logic.
+Hyperfine remains authoritative for user-visible latency. Tracy is diagnostic instrumentation and is never enabled in a normal build.
 
 ## Setup
-
-Install both tools under ignored `target/perf-tools/`:
 
 ```console
 cargo perf setup
 ```
 
-Samply also relies on platform profiling support. On Windows, install the [Windows Performance Toolkit](https://learn.microsoft.com/windows-hardware/test/wpt/) so `xperf` is available and run profiling with administrator privileges. Linux may require permission to use performance events. On macOS, follow Samply's code-signing setup if requested.
-
-The complete command interface is available through:
+The command installs pinned tools under ignored `target/perf-tools/`. It verifies the official Tracy Windows archive against SHA-256 `ee6db1a7e71a12deb5973a8dbfdf9f36d3635bec0e0b31b1cc74f28de7dac4c9` before publication. Setup and profiling run unattended in a standard non-elevated Windows session.
 
 ```console
 cargo perf --help
@@ -31,72 +27,96 @@ cargo perf startup
 
 The command first builds Wren with Cargo's release profile. Hyperfine then launches the no-argument executable directly, with 20 warmups and at least 100 measured runs. Compilation and intermediate shell startup are outside the timed region.
 
-The measurement includes operating-system process creation, dynamic-library loading, Wren initialization and execution, and process shutdown. It is a warm-process-start measurement: executable and library pages may already be cached.
-
-Results are written to:
+Results are published transactionally to:
 
 ```text
-target/perf/startup.json
-target/perf/startup.md
+target/perf/startup/results.json
+target/perf/startup/results.md
 ```
 
-### Initial baseline
+The measurement includes Windows process creation, dynamic-library loading, Wren initialization, execution, and shutdown. It is a warm-process-start measurement because executable and library pages may already be cached.
 
-The initial baseline measured the harness source at commit `a2612a6a3d3960f72ef6773d8797a161d9a0214d`.
+### Recorded measurements
 
-| Field | Value |
-| --- | --- |
-| Date | 2026-07-24 |
-| OS | Microsoft Windows 11 Home 10.0.26200, build 26200 |
-| CPU | 12th Gen Intel Core i5-1235U, 10 cores / 12 logical processors |
-| Rust | 1.97.1 (`8bab26f4f`), `x86_64-pc-windows-msvc` |
-| Hyperfine | 1.20.0 |
-| Runs | 20 warmups, 236 measured runs |
-| Mean | 14.6 ms |
-| Standard deviation | 4.0 ms |
-| Median | 14.2 ms |
-| Range | 7.2 ms to 28.1 ms |
+The first measurement, at commit `a2612a6a3d3960f72ef6773d8797a161d9a0214d`, reported 14.6 ms mean with 4.0 ms standard deviation over 236 runs on Windows 11 build 26200 and an Intel Core i5-1235U. The high variance makes this historical observation unsuitable as a budget.
 
-This machine-local baseline is a reference, not a portable performance budget. Its variance demonstrates why regression decisions should compare baseline and candidate binaries in one run on the same machine.
+A later 500-run control on the same machine measured an optimized empty Rust executable at `6.9 ms +/- 1.5 ms` and Wren at `7.4 ms +/- 1.7 ms`; their difference was within uncertainty. This demonstrates that most no-op latency is the Windows process floor. Regression decisions must compare baseline and candidate binaries together on the same machine rather than compare against either absolute number.
 
 ## Regression comparison
 
-Build the two revisions into separate target directories, then run:
+Build revisions into separate target directories, then run:
 
 ```console
 cargo perf compare <baseline-binary> <candidate-binary>
 ```
 
-Use the release executables, adding `.exe` on Windows. Hyperfine measures both under the same conditions, treats the first as the reference, and writes:
+Use `.exe` paths on Windows. Hyperfine measures both in one invocation and publishes:
 
 ```text
-target/perf/startup-comparison.json
-target/perf/startup-comparison.md
+target/perf/startup-comparison/results.json
+target/perf/startup-comparison/results.md
 ```
 
-A slowdown is meaningful when it remains after repeating the comparison under quiet conditions and is larger than the reported uncertainty. A clear, unexplained slowdown blocks the change. Do not compare absolute results from different machines as a regression test.
+Repeat a comparison under quiet conditions when a difference is comparable to the reported uncertainty. A repeatable, unexplained slowdown blocks the change.
 
 ## Function-level diagnosis
 
-When Hyperfine identifies a meaningful slowdown, record a profile:
-
 ```console
 cargo perf profile-startup
+```
+
+This command:
+
+1. Builds the optimized `profiling` Cargo profile with Wren's `profiling` feature.
+2. Starts the official `tracy-capture` collector on localhost.
+3. Requires Wren to observe the collector before entering the measured root scope.
+4. Captures for one bounded second while Wren waits outside the root scope for collector shutdown.
+5. Exports every zone through the official `tracy-csvexport` tool.
+6. Verifies that the CSV contains the resolved `wren.run` zone.
+7. Atomically publishes the completed output directory.
+
+Retained outputs are:
+
+```text
+target/perf/startup-profile/profile.tracy
+target/perf/startup-profile/zones.csv
+```
+
+Agents inspect `zones.csv`, whose established Tracy format contains zone name, source file and line, timestamp, duration, thread, and value. Humans can optionally open the same capture with:
+
+```console
 cargo perf view-profile
 ```
 
-The first command builds Wren with the `profiling` Cargo profile, which retains release optimization and adds debug symbols. Samply requests a 10,000 Hz sampling rate across 1,000 process launches, merges equivalent non-overlapping threads, and saves `target/perf/startup-profile.json.gz`. The second command opens the appropriate profiler UI.
+No ETW kernel logger, Windows Performance Toolkit, administrator access, UAC approval, custom trace parser, system sampling, or native call-stack collection is involved.
 
-On Windows, the command also retains Samply's kernel trace, merges it, and uses `xperf` with Wren's PDB to create an agent-readable function report:
+## Instrumentation rules
 
-```text
-target/perf/startup-profile.kernel.etl
-target/perf/startup-profile.etl
-target/perf/startup-profile.txt
+The optional `tracy-client` dependency has default features disabled. Only `enable`, `ondemand`, and `only-localhost` are enabled. `flush-on-exit` is prohibited because an unconnected process can wait indefinitely.
+
+- Use static nested scopes to represent the logical call stack.
+- Prefer numeric values for tags.
+- Attach bounded text only to coarse scopes where it materially aids diagnosis.
+- Do not request native call stacks at routine sites.
+- Put one scope around a batch when individual operations are expected to take less than roughly 10 microseconds.
+- End measured scopes before profile-only connection or drain waits.
+
+Normal builds do not include `tracy-client`; profiling macros expand to no-op values and optimize away. The Windows overhead spike recorded on issue #5 found no measurable compiled-out cost, about 7-9 ns per disconnected on-demand site, and about 60-106 ns per connected static or tagged site. Native stack collection cost about 0.58-1.08 microseconds and remains opt-in only.
+
+## Artifact lifecycle
+
+- `target/perf-tools/` is a retained, ignored cache of checksum-verified tools.
+- `.staging-*` directories contain incomplete runs and are deleted on normal failure.
+- Download archives and capture intermediates are temporary and are deleted before publication.
+- Named directories under `target/perf/` are the latest retained results.
+- `target/perf-baseline/` and `target/perf-candidate/` are intermediate comparison builds.
+- `target/profiling/` is Cargo's reusable optimized profiling-build cache.
+- Publication swaps a complete staged directory into place; a failed run leaves the previous result intact.
+
+Remove retained results and abandoned staging data deterministically with:
+
+```console
+cargo perf clean
 ```
 
-Windows 11 24H2-era builds can exhibit the operating-system TDH regression tracked by [Samply #348](https://github.com/mstange/samply/issues/348), causing Samply's JSON to contain no samples even though the ETL trace contains them. On Windows, `cargo perf view-profile` therefore opens the merged ETL in Windows Performance Analyzer, and agents should read `startup-profile.txt` for symbolized function data. Other platforms open the Samply profile UI.
-
-The initial Windows 11 build 26200 validation exercised this fallback and resolved Wren frames including `wren.exe!main`, `std::env::args_os`, allocation, and Rust runtime initialization.
-
-Samply attributes sampled CPU activity; it does not replace the wall-clock benchmark. If elapsed startup regresses without a corresponding CPU call-path change, use platform tracing to investigate I/O, scheduling, and other off-CPU causes.
+The command removes retained results, intermediate comparison builds, and abandoned staging data. It preserves installed tools and Cargo's profiling-build cache so later runs remain offline except for Cargo builds.

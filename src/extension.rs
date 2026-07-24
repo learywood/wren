@@ -16,9 +16,12 @@ impl LoadedExtension {
     pub fn load(path: &Path) -> Result<Self, LoadError> {
         // SAFETY: native extensions are trusted code. The library remains loaded
         // for at least as long as every value and function pointer obtained from it.
-        let library = unsafe { Library::new(path) }.map_err(|error| {
-            LoadError::new(format!("could not load {}: {error}", path.display()))
-        })?;
+        let library = {
+            let _open = profile_scope!("wren.extension.open_library");
+            unsafe { Library::new(path) }.map_err(|error| {
+                LoadError::new(format!("could not load {}: {error}", path.display()))
+            })?
+        };
 
         let fingerprint = {
             // SAFETY: only the stable fingerprint function is called before its
@@ -54,12 +57,17 @@ impl LoadedExtension {
         };
         // SAFETY: the symbol and its native ABI were validated above.
         let mut instance = unsafe { create() };
-        let name = instance
-            .extension_mut()
-            .initialize()
-            .map_err(|error| LoadError::new(format!("extension initialization failed: {error}")))?
-            .name()
-            .to_owned();
+        let name = {
+            let _initialize = profile_scope!("wren.extension.initialize");
+            instance
+                .extension_mut()
+                .initialize()
+                .map_err(|error| {
+                    LoadError::new(format!("extension initialization failed: {error}"))
+                })?
+                .name()
+                .to_owned()
+        };
 
         if name.is_empty() {
             return Err(LoadError::new("the extension name was empty"));
