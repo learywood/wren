@@ -15,7 +15,7 @@ Install both tools under ignored `target/perf-tools/`:
 cargo perf setup
 ```
 
-Samply also relies on platform profiling support. On Windows, install the Windows Performance Toolkit so `xperf` is available and run profiling with administrator privileges. Linux may require permission to use performance events. On macOS, follow Samply's code-signing setup if requested.
+Samply also relies on platform profiling support. On Windows, install the [Windows Performance Toolkit](https://learn.microsoft.com/windows-hardware/test/wpt/) so `xperf` is available and run profiling with administrator privileges. Linux may require permission to use performance events. On macOS, follow Samply's code-signing setup if requested.
 
 The complete command interface is available through:
 
