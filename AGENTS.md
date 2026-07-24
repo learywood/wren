@@ -30,6 +30,9 @@ For changes that may affect startup or performance-sensitive runtime paths:
 - Load the `wren-performance` skill.
 - Measure the real release harness before and after the change.
 - Investigate meaningful regressions with the documented profiler workflow.
+- Compile profiling sites completely out of normal builds.
+- Use static scopes and numeric values by default; keep text and native call stacks explicitly coarse and opt-in.
+- Batch profiling around operations expected to take less than roughly 10 microseconds.
 - Do not merge an unexplained performance regression.
 
 ## GitHub Issues Workflow

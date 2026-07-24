@@ -1,22 +1,65 @@
+#[cfg(feature = "profiling")]
+macro_rules! profile_scope {
+    ($name:literal) => {
+        tracy_client::span!($name)
+    };
+}
+
+#[cfg(not(feature = "profiling"))]
+macro_rules! profile_scope {
+    ($name:literal) => {
+        ()
+    };
+}
+
 mod extension;
+#[cfg(feature = "profiling")]
+mod profile;
 
 use std::{env, ffi::OsString, path::PathBuf, process::ExitCode};
 
 use extension::LoadedExtension;
 
 fn main() -> ExitCode {
+    #[cfg(feature = "profiling")]
+    let session = match profile::Session::start() {
+        Ok(session) => session,
+        Err(error) => {
+            eprintln!("wren: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let result = {
+        let _run = profile_scope!("wren.run");
+        run()
+    };
+
+    #[cfg(feature = "profiling")]
+    if let Err(error) = session.finish() {
+        eprintln!("wren: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    result
+}
+
+fn run() -> ExitCode {
     match extension_path(env::args_os().skip(1)) {
         Ok(None) => ExitCode::SUCCESS,
-        Ok(Some(path)) => match LoadedExtension::load(&path) {
-            Ok(extension) => {
-                println!("initialized extension: {}", extension.name());
-                ExitCode::SUCCESS
+        Ok(Some(path)) => {
+            let _load = profile_scope!("wren.extension.load");
+            match LoadedExtension::load(&path) {
+                Ok(extension) => {
+                    println!("initialized extension: {}", extension.name());
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("wren: {error}");
+                    ExitCode::FAILURE
+                }
             }
-            Err(error) => {
-                eprintln!("wren: {error}");
-                ExitCode::FAILURE
-            }
-        },
+        }
         Err(message) => {
             eprintln!("wren: {message}");
             ExitCode::FAILURE
