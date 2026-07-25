@@ -16,7 +16,7 @@ Implementation: `src/tools.rs` (trait, registry, all eight implementations, trun
 
 - **Schema/usage:** required `path`; optional one-based `offset`/`limit`. Text and common image formats are accepted.
 - **Dispatch/execution:** cwd-scoped async file I/O; identifies and optionally resizes/re-encodes images, while text is range-read and cacheable.
-- **Output/errors:** text/image content blocks plus metadata; bounded preview and artifact reference for oversized source. Rejects directories, files above 100 MiB, invalid ranges/encoding/images, or scope/I/O failures through `Error::tool`.
+- **Output/errors:** text lines are prefixed with right-aligned numbers such as `    1→content`, or optional hashlines, and partial reads append Pi-style continuation notices. Results use text/image content blocks plus metadata, with a bounded preview and artifact reference for oversized source. Rejects directories, files above 100 MiB, invalid ranges/encoding/images, or scope/I/O failures through `Error::tool`.
 - **Implementation:** `src/tools.rs` (`ReadTool`, image helpers, artifact helpers).
 
 ### `bash`

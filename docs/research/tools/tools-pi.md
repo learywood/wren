@@ -16,7 +16,7 @@ Implementation: `packages/agent/src/types.ts`, `packages/agent/src/agent-loop.ts
 
 - **Schema/usage:** `path` required; optional one-based `offset` and `limit`. Reads text ranges or supported images.
 - **Dispatch/execution:** resolves relative paths against session cwd, stats through the injected filesystem, detects image MIME by extension, and otherwise delegates line reading to operations.
-- **Output/errors:** text uses numbered chunks and reports remaining-line continuation; oversized lines/chunks are bounded. Images return an image content block and metadata. Missing paths, directories, bad ranges, unsupported images, and backend failures throw tool errors.
+- **Output/errors:** text preserves the selected file lines without per-line prefixes, then appends a remaining-lines or truncation notice with the next offset when needed; truncation is also recorded in result details. Oversized first lines produce an explanatory fallback notice. Images return an image content block and metadata. Missing paths, directories, bad ranges, unsupported images, and backend failures throw tool errors.
 - **Implementation:** `packages/coding-agent/src/core/tools/read.ts`.
 
 ### `bash`

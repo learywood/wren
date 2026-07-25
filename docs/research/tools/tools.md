@@ -18,6 +18,20 @@ This directory records how the checked-in reference harnesses expose and execute
 - **Results:** each system returns model-visible text, with some supporting images or structured details. Pi and its Rust port make truncation explicit; larger harnesses additionally persist artifacts, stream progress, or provide domain-specific structured output.
 - **Errors:** schema rejection occurs before execution where strict validation is enabled. Runtime failures are either thrown/returned as harness errors or represented as tool results marked erroneous. Several tools deliberately return corrective text for recoverable invocation mistakes.
 
+## Read output formats
+
+The read tools do not share one presentation convention:
+
+| Harness | Normal text output |
+|---|---|
+| Pi | Selected file text without per-line prefixes; appends a model-visible remaining-lines or truncation notice with the next line offset and also records truncation details. |
+| oh-my-pi | Configurable raw, `N|content`, or hashline-anchored output; its default hashline edit mode selects hashline output when the edit tool is available. |
+| pi_agent_rust | Right-aligned line numbers such as `    1→content`, or optional hashlines; appends Pi-style continuation notices. |
+| rust-code | A `File contents of <path>:` heading followed by unprefixed selected text; range and continuation notices surround partial reads. |
+| VTCode | Line-based reads place unprefixed text in a structured response with `has_more`; its separate byte-range mode prefixes line numbers. |
+
+Most normalize returned line endings to `\n`. A later targeted inspection of the now-removed experimental `read_file` in `openai/codex` found `L1: content` prefixes and no continuation notice (`14c35a16a8^` in the Codex history).
+
 ## Reading convention
 
 Each harness document first describes its architecture, then gives a terse technical entry for every canonical built-in tool in the inspected catalog. “Schema” summarizes model-visible arguments rather than reproducing JSON Schema. “Output/errors” covers result shape, bounding, and notable failure behavior. Repository-relative paths refer to the pinned checkout listed in `docs/references/github.com`.

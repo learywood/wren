@@ -13,7 +13,7 @@ Implementation: `packages/agent/src/types.ts`, `packages/agent/src/agent-loop.ts
 ## Tools
 
 ### `read`
-Schema: path plus optional offset/limit. Cwd-scoped filesystem execution reads text or images; used for bounded inspection. Returns content blocks, truncation/continuation metadata, and errors for bad ranges, missing/directories, encoding, or I/O. Implementation: `packages/coding-agent/src/tools/read.ts`.
+Schema: path plus optional offset/limit. Cwd-scoped filesystem execution reads text or images; used for bounded inspection. Model text is configurable as raw lines, `N|content`, or hashline anchors; the default hashline edit mode selects hashlines when editing is available. Results include truncation/continuation text and metadata; bad ranges, missing/directories, encoding, or I/O fail. Implementation: `packages/coding-agent/src/tools/read.ts` and `packages/coding-agent/src/utils/file-display-mode.ts`.
 
 ### `write`
 Schema: path and complete content. Creates parents and writes through the session writethrough/LSP pipeline; used for create/replace. Returns write and optional diagnostics details; scope, size, formatting, and I/O failures are surfaced. Implementation: `packages/coding-agent/src/tools/write.ts`, `packages/coding-agent/src/lsp/index.ts`.

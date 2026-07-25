@@ -62,7 +62,7 @@ Schema: HTTP(S) URL and optional `max_bytes` capped at 262,144. Native one-shot 
 Uses the `exec_command` schema but dispatches through `run_pty_cmd_executor` with a controlling PTY. Returns output/status/session ID; PTY allocation, sandbox, timeout, and process errors fail. Implementation: registry handlers and PTY manager.
 
 ### `read_file`
-Schema supplied by its handler: path plus chunk/range or indentation-aware selection. `read_file_executor` returns bounded file content; path policy, range, binary/size, and I/O errors fail. Implementation: `tools/handlers/read_file.rs` and `tools/registry/executors.rs`.
+Schema supplied by its handler: path plus chunk/range or indentation-aware selection. Line-based reads return unprefixed bounded text in a structured response containing the path, success state, and optional `has_more`; the separate byte-range mode prefixes line numbers. Path policy, range, binary/size, and I/O errors fail. Implementation: `tools/handlers/read_file.rs`, `tools/file_ops/mod.rs`, and `tools/registry/executors.rs`.
 
 ### `list_files`
 Schema: path, pagination, and listing filters. `list_files_executor` returns bounded files/directories and continuation state; invalid/inaccessible directories and pagination values error. Implementation: shared `list_files_parameters`, `tools/handlers/list_dir_handler.rs`, and `tools/registry/executors.rs`.

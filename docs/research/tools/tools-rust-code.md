@@ -15,7 +15,7 @@ Implementation: `crates/sgr-agent-core/src/agent_tool.rs`, `crates/sgr-agent/src
 The entries below cover the application registry built in `crates/rc-cli/src/agent.rs`.
 
 ### `read_file`
-Schema: `path`, optional line range. Resolves against shared cwd and reads a bounded text slice. Returns numbered text; missing/non-file/range/I/O failures become `ToolError`. Implementation: `crates/rc-cli/src/tools/read_file_tool.rs`.
+Schema: `path`, optional line range. Resolves against shared cwd and reads a bounded text slice. First reads return `File contents of <path>:` followed by unprefixed selected lines; partial reads add range and next-offset notices, while repeated reads return a warning and short preview. I/O failures become `ToolError`; an offset beyond the file is explanatory text. Implementation: `crates/rc-cli/src/tools/read_file_tool.rs` and `crates/sgr-agent/src/app_tools/fs.rs`.
 
 ### `write_file`
 Schema: `path`, complete `content`. Resolves cwd, creates parents, and replaces the file. Returns confirmation; path/create/write failures are errors. Implementation: `crates/rc-cli/src/tools/write_file_tool.rs`.
