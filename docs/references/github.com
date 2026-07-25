@@ -3,6 +3,7 @@
 Repositories that may be useful for Wren implementation research:
 
 - [can1357/oh-my-pi](https://github.com/can1357/oh-my-pi) — Terminal coding agent with an optimized tool harness, LSP support, browser tools, and subagents.
+- [earendil-works/pi](https://github.com/earendil-works/pi) — Source for the Pi coding agent used to run Wren development sessions.
 - [agentclientprotocol/agent-client-protocol](https://github.com/agentclientprotocol/agent-client-protocol) — Protocol for connecting editors to agents.
 - [0xPlaygrounds/rig](https://github.com/0xPlaygrounds/rig) — Modular Rust framework for building LLM applications.
 - [Dicklesworthstone/pi_agent_rust](https://github.com/Dicklesworthstone/pi_agent_rust) — Rust implementation of a high-performance coding agent CLI.
