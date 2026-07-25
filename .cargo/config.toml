@@ -1,2 +1,3 @@
 [alias]
+install-wren = "install --path . --locked --force"
 perf = "run --quiet --package wren-perf --"
