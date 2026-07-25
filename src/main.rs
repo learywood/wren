@@ -10,6 +10,7 @@ macro_rules! profile_scope {
     ($name:literal) => {};
 }
 
+mod config;
 mod extension;
 #[cfg(feature = "profiling")]
 mod profile;
@@ -18,14 +19,14 @@ use std::{
     env,
     ffi::OsString,
     io::{self, Write},
-    path::{Path, PathBuf},
     process::ExitCode,
 };
 
-use extension::LoadedExtension;
+use config::Config;
+use extension::ExtensionRegistry;
 use serde_json::Value;
 
-const USAGE: &str = "usage: wren [--extension <path> [tool <name> --args <json>]]";
+const USAGE: &str = "usage: wren [tool <name> --args <json>]";
 
 fn main() -> ExitCode {
     #[cfg(feature = "profiling")]
@@ -52,28 +53,26 @@ fn main() -> ExitCode {
 }
 
 fn run() -> ExitCode {
-    match command(env::args_os().skip(1)) {
-        Ok(Command::Start) => ExitCode::SUCCESS,
-        Ok(Command::Load { path }) => load_extension(&path),
-        Ok(Command::Invoke {
-            path,
-            tool_name,
-            arguments,
-        }) => invoke_tool(&path, &tool_name, &arguments),
+    let command = match command(env::args_os().skip(1)) {
+        Ok(command) => command,
         Err(message) => {
             eprintln!("wren: {message}");
-            ExitCode::FAILURE
+            return ExitCode::FAILURE;
         }
+    };
+
+    match command {
+        Command::Start => start(),
+        Command::Invoke {
+            tool_name,
+            arguments,
+        } => invoke_tool(&tool_name, &arguments),
     }
 }
 
-fn load_extension(path: &Path) -> ExitCode {
-    profile_scope!("wren.extension.load");
-    match LoadedExtension::load(path) {
-        Ok(extension) => {
-            println!("initialized extension: {}", extension.name());
-            ExitCode::SUCCESS
-        }
+fn start() -> ExitCode {
+    match start_registry() {
+        Ok(_registry) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("wren: {error}");
             ExitCode::FAILURE
@@ -81,7 +80,15 @@ fn load_extension(path: &Path) -> ExitCode {
     }
 }
 
-fn invoke_tool(path: &Path, tool_name: &str, arguments: &str) -> ExitCode {
+fn start_registry() -> Result<ExtensionRegistry, String> {
+    let config = Config::load().map_err(|error| format!("configuration error: {error}"))?;
+    let executable = env::current_exe()
+        .map_err(|error| format!("could not determine the executable path: {error}"))?;
+    profile_scope!("wren.extension.registry.start");
+    ExtensionRegistry::start(&executable, &config).map_err(|error| error.to_string())
+}
+
+fn invoke_tool(tool_name: &str, arguments: &str) -> ExitCode {
     let value: Value = match serde_json::from_str(arguments) {
         Ok(value @ Value::Object(_)) => value,
         Ok(_) => {
@@ -100,17 +107,15 @@ fn invoke_tool(path: &Path, tool_name: &str, arguments: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-
-    profile_scope!("wren.extension.load");
-    let mut extension = match LoadedExtension::load(path) {
-        Ok(extension) => extension,
+    let mut registry = match start_registry() {
+        Ok(registry) => registry,
         Err(error) => {
             eprintln!("wren: {error}");
             return ExitCode::FAILURE;
         }
     };
 
-    match extension.invoke_tool(tool_name, value, &working_directory) {
+    match registry.invoke_tool(tool_name, value, &working_directory) {
         Ok(output) => {
             if let Err(error) = io::stdout().write_all(output.text().as_bytes()) {
                 eprintln!("wren: could not write tool output: {error}");
@@ -128,11 +133,7 @@ fn invoke_tool(path: &Path, tool_name: &str, arguments: &str) -> ExitCode {
 
 enum Command {
     Start,
-    Load {
-        path: PathBuf,
-    },
     Invoke {
-        path: PathBuf,
         tool_name: String,
         arguments: String,
     },
@@ -142,17 +143,7 @@ fn command(mut arguments: impl Iterator<Item = OsString>) -> Result<Command, Str
     let Some(argument) = arguments.next() else {
         return Ok(Command::Start);
     };
-    if argument != "--extension" {
-        return Err(USAGE.to_owned());
-    }
-
-    let path = arguments
-        .next()
-        .ok_or_else(|| "--extension requires a library path".to_owned())?;
-    let Some(subcommand) = arguments.next() else {
-        return Ok(Command::Load { path: path.into() });
-    };
-    if subcommand != "tool" {
+    if argument != "tool" {
         return Err(USAGE.to_owned());
     }
 
@@ -174,7 +165,6 @@ fn command(mut arguments: impl Iterator<Item = OsString>) -> Result<Command, Str
     }
 
     Ok(Command::Invoke {
-        path: path.into(),
         tool_name,
         arguments: json,
     })
