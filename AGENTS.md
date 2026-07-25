@@ -23,6 +23,10 @@ All documentation belongs in `/docs/`:
 
 Keep documentation close to demonstrated needs; do not add speculative documents.
 
+## Build Workflow
+
+Always build the complete optimized Wren installation with `cargo install-wren`. This installs the release executable and bundled extensions into Cargo's binary directory on `PATH`; do not stop at a debug or intermediate build artifact.
+
 ## Performance Backpressure
 
 For changes that may affect startup or performance-sensitive runtime paths:
