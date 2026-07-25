@@ -1,13 +1,15 @@
-use std::{ffi::CStr, fmt, path::Path};
+use std::{collections::HashSet, ffi::CStr, fmt, path::Path};
 
 use libloading::Library;
+use serde_json::Value;
 use wren_extension::{
     BUILD_FINGERPRINT, CREATE_SYMBOL, CreateFunction, ExtensionInstance, FINGERPRINT_SYMBOL,
-    FingerprintFunction,
+    FingerprintFunction, ToolContext, ToolError, ToolOutput,
 };
 
 pub struct LoadedExtension {
     name: String,
+    tool_names: Vec<String>,
     instance: Option<ExtensionInstance>,
     _library: Library,
 }
@@ -17,7 +19,7 @@ impl LoadedExtension {
         // SAFETY: native extensions are trusted code. The library remains loaded
         // for at least as long as every value and function pointer obtained from it.
         let library = {
-            let _open = profile_scope!("wren.extension.open_library");
+            profile_scope!("wren.extension.open_library");
             unsafe { Library::new(path) }.map_err(|error| {
                 LoadError::new(format!("could not load {}: {error}", path.display()))
             })?
@@ -58,7 +60,7 @@ impl LoadedExtension {
         // SAFETY: the symbol and its native ABI were validated above.
         let mut instance = unsafe { create() };
         let name = {
-            let _initialize = profile_scope!("wren.extension.initialize");
+            profile_scope!("wren.extension.initialize");
             instance
                 .extension_mut()
                 .initialize()
@@ -73,8 +75,11 @@ impl LoadedExtension {
             return Err(LoadError::new("the extension name was empty"));
         }
 
+        let tool_names = validate_tools(&mut instance)?;
+
         Ok(Self {
             name,
+            tool_names,
             instance: Some(instance),
             _library: library,
         })
@@ -83,6 +88,86 @@ impl LoadedExtension {
     pub fn name(&self) -> &str {
         &self.name
     }
+
+    pub fn invoke_tool(
+        &mut self,
+        name: &str,
+        arguments: Value,
+        working_directory: &Path,
+    ) -> Result<ToolOutput, ToolError> {
+        if !self.tool_names.iter().any(|tool_name| tool_name == name) {
+            return Err(ToolError::new(
+                "unknown_tool",
+                format!("no loaded tool is named {name:?}"),
+            ));
+        }
+
+        let index = self
+            .tool_names
+            .iter()
+            .position(|tool_name| tool_name == name)
+            .expect("the tool name was checked above");
+        let instance = self
+            .instance
+            .as_mut()
+            .expect("the extension instance exists until drop");
+        let Some(tool) = instance.extension_mut().tool(index) else {
+            return Err(ToolError::new(
+                "tool_unavailable",
+                format!("tool {name:?} is no longer available"),
+            ));
+        };
+        if tool.definition().name() != name {
+            return Err(ToolError::new(
+                "tool_unavailable",
+                format!("tool {name:?} changed its registration"),
+            ));
+        }
+        tool.invoke(arguments, &ToolContext::new(working_directory))
+    }
+}
+
+fn validate_tools(instance: &mut ExtensionInstance) -> Result<Vec<String>, LoadError> {
+    let mut names = Vec::new();
+    let mut unique_names = HashSet::new();
+    let mut index = 0_usize;
+
+    while let Some(tool) = instance.extension_mut().tool(index) {
+        let definition = tool.definition();
+        if definition.name().is_empty() {
+            return Err(LoadError::new("a tool name was empty"));
+        }
+        if definition.description().is_empty() {
+            return Err(LoadError::new(format!(
+                "tool {:?} has an empty description",
+                definition.name()
+            )));
+        }
+        let schema: Value = serde_json::from_str(definition.input_schema()).map_err(|error| {
+            LoadError::new(format!(
+                "tool {:?} has invalid JSON Schema: {error}",
+                definition.name()
+            ))
+        })?;
+        if !schema.is_object() {
+            return Err(LoadError::new(format!(
+                "tool {:?} has a non-object JSON Schema",
+                definition.name()
+            )));
+        }
+        if !unique_names.insert(definition.name().to_owned()) {
+            return Err(LoadError::new(format!(
+                "duplicate tool name {:?}",
+                definition.name()
+            )));
+        }
+        names.push(definition.name().to_owned());
+        index = index
+            .checked_add(1)
+            .ok_or_else(|| LoadError::new("the extension exposed too many tools"))?;
+    }
+
+    Ok(names)
 }
 
 impl Drop for LoadedExtension {
