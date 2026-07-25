@@ -1,11 +1,288 @@
-use std::{collections::HashSet, ffi::CStr, fmt, path::Path};
+use std::{
+    collections::{BTreeMap, HashSet},
+    ffi::CStr,
+    fmt, fs, io,
+    path::{Component, Path, PathBuf},
+};
 
 use libloading::Library;
+use serde::Deserialize;
 use serde_json::Value;
 use wren_extension::{
     BUILD_FINGERPRINT, CREATE_SYMBOL, CreateFunction, ExtensionInstance, FINGERPRINT_SYMBOL,
     FingerprintFunction, ToolContext, ToolError, ToolOutput,
 };
+
+use crate::config::{Config, LoadMode, validate_extension_id};
+
+pub struct ExtensionRegistry {
+    extensions: BTreeMap<String, InstalledExtension>,
+    tool_owners: BTreeMap<String, String>,
+}
+
+impl ExtensionRegistry {
+    pub fn start(executable: &Path, config: &Config) -> Result<Self, RegistryError> {
+        config.validate().map_err(RegistryError::configuration)?;
+        let executable_directory = executable.parent().ok_or_else(|| {
+            RegistryError::new(format!(
+                "the executable has no parent directory: {}",
+                executable.display()
+            ))
+        })?;
+        let extensions_directory = executable_directory.join("extensions");
+        let mut registry = Self {
+            extensions: discover_extensions(&extensions_directory)?,
+            tool_owners: BTreeMap::new(),
+        };
+
+        for (id, mode) in config.mode_overrides() {
+            let extension = registry.extensions.get_mut(id).ok_or_else(|| {
+                RegistryError::new(format!("configured extension {id:?} is not installed"))
+            })?;
+            extension.mode = mode;
+        }
+        for id in config.requested_extensions() {
+            if !registry.extensions.contains_key(id) {
+                return Err(RegistryError::new(format!(
+                    "requested extension {id:?} is not installed"
+                )));
+            }
+        }
+
+        let automatic = registry
+            .extensions
+            .iter()
+            .filter(|(_, extension)| extension.mode == LoadMode::Auto)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in automatic {
+            registry.load(&id)?;
+        }
+        for id in config.requested_extensions() {
+            registry.load(id)?;
+        }
+
+        Ok(registry)
+    }
+
+    pub fn load(&mut self, id: &str) -> Result<(), RegistryError> {
+        let extension = self
+            .extensions
+            .get_mut(id)
+            .ok_or_else(|| RegistryError::new(format!("extension {id:?} is not installed")))?;
+        match &extension.state {
+            ExtensionState::Active(_) => return Ok(()),
+            ExtensionState::Failed(message) => {
+                return Err(RegistryError::new(format!(
+                    "extension {id:?} previously failed to load: {message}"
+                )));
+            }
+            ExtensionState::Installed => {}
+            ExtensionState::Loading => {
+                return Err(RegistryError::new(format!(
+                    "extension {id:?} is already loading"
+                )));
+            }
+        }
+
+        let library = extension.library.clone();
+        extension.state = ExtensionState::Loading;
+        let loaded = match LoadedExtension::load(&library) {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                let message = error.to_string();
+                self.extensions
+                    .get_mut(id)
+                    .expect("the loading extension remains registered")
+                    .state = ExtensionState::Failed(message.clone());
+                return Err(RegistryError::new(format!(
+                    "could not load extension {id:?}: {message}"
+                )));
+            }
+        };
+
+        if loaded.name() != id {
+            let message = format!(
+                "manifest ID {id:?} does not match initialized name {:?}",
+                loaded.name()
+            );
+            self.extensions
+                .get_mut(id)
+                .expect("the loading extension remains registered")
+                .state = ExtensionState::Failed(message.clone());
+            return Err(RegistryError::new(message));
+        }
+
+        for tool_name in loaded.tool_names() {
+            if let Some(owner) = self.tool_owners.get(tool_name) {
+                let message = format!(
+                    "tool {tool_name:?} is registered by both extension {owner:?} and {id:?}"
+                );
+                self.extensions
+                    .get_mut(id)
+                    .expect("the loading extension remains registered")
+                    .state = ExtensionState::Failed(message.clone());
+                return Err(RegistryError::new(message));
+            }
+        }
+        for tool_name in loaded.tool_names() {
+            self.tool_owners.insert(tool_name.to_owned(), id.to_owned());
+        }
+        self.extensions
+            .get_mut(id)
+            .expect("the loading extension remains registered")
+            .state = ExtensionState::Active(loaded);
+        Ok(())
+    }
+
+    pub fn invoke_tool(
+        &mut self,
+        name: &str,
+        arguments: Value,
+        working_directory: &Path,
+    ) -> Result<ToolOutput, ToolError> {
+        let Some(owner) = self.tool_owners.get(name) else {
+            return Err(ToolError::new(
+                "unknown_tool",
+                format!("no loaded tool is named {name:?}"),
+            ));
+        };
+        let extension = self
+            .extensions
+            .get_mut(owner)
+            .expect("tool owners refer to registered extensions");
+        let ExtensionState::Active(extension) = &mut extension.state else {
+            return Err(ToolError::new(
+                "tool_unavailable",
+                format!("tool {name:?} is no longer available"),
+            ));
+        };
+        extension.invoke_tool(name, arguments, working_directory)
+    }
+}
+
+struct InstalledExtension {
+    _generation: String,
+    library: PathBuf,
+    mode: LoadMode,
+    state: ExtensionState,
+}
+
+enum ExtensionState {
+    Installed,
+    Loading,
+    Active(LoadedExtension),
+    Failed(String),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExtensionManifest {
+    id: String,
+    generation: String,
+    library: PathBuf,
+    mode: LoadMode,
+}
+
+fn discover_extensions(
+    extensions_directory: &Path,
+) -> Result<BTreeMap<String, InstalledExtension>, RegistryError> {
+    let entries = match fs::read_dir(extensions_directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(error) => {
+            return Err(RegistryError::new(format!(
+                "could not inspect {}: {error}",
+                extensions_directory.display()
+            )));
+        }
+    };
+    let mut directories = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            RegistryError::new(format!(
+                "could not inspect {}: {error}",
+                extensions_directory.display()
+            ))
+        })?;
+        if entry
+            .file_type()
+            .map_err(|error| {
+                RegistryError::new(format!(
+                    "could not inspect {}: {error}",
+                    entry.path().display()
+                ))
+            })?
+            .is_dir()
+        {
+            directories.push(entry.path());
+        }
+    }
+    directories.sort();
+
+    let mut extensions = BTreeMap::new();
+    for directory in directories {
+        let manifest_path = directory.join("extension.toml");
+        let text = fs::read_to_string(&manifest_path).map_err(|error| {
+            RegistryError::new(format!(
+                "could not read {}: {error}",
+                manifest_path.display()
+            ))
+        })?;
+        let manifest: ExtensionManifest = toml::from_str(&text).map_err(|error| {
+            RegistryError::new(format!(
+                "could not parse {}: {error}",
+                manifest_path.display()
+            ))
+        })?;
+        validate_extension_id(&manifest.id).map_err(RegistryError::configuration)?;
+        if manifest.generation.is_empty() {
+            return Err(RegistryError::new(format!(
+                "extension {:?} has an empty generation",
+                manifest.id
+            )));
+        }
+        let directory_id = directory
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                RegistryError::new(format!(
+                    "extension directory name is not Unicode: {}",
+                    directory.display()
+                ))
+            })?;
+        if directory_id != manifest.id {
+            return Err(RegistryError::new(format!(
+                "extension directory {directory_id:?} contains manifest ID {:?}",
+                manifest.id
+            )));
+        }
+        if manifest.library.as_os_str().is_empty()
+            || manifest
+                .library
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_) | Component::CurDir))
+        {
+            return Err(RegistryError::new(format!(
+                "extension {:?} has an invalid library path",
+                manifest.id
+            )));
+        }
+        let id = manifest.id;
+        let installed = InstalledExtension {
+            _generation: manifest.generation,
+            library: directory.join(manifest.library),
+            mode: manifest.mode,
+            state: ExtensionState::Installed,
+        };
+        if extensions.insert(id.clone(), installed).is_some() {
+            return Err(RegistryError::new(format!(
+                "duplicate installed extension ID {id:?}"
+            )));
+        }
+    }
+    Ok(extensions)
+}
 
 pub struct LoadedExtension {
     name: String,
@@ -15,7 +292,7 @@ pub struct LoadedExtension {
 }
 
 impl LoadedExtension {
-    pub fn load(path: &Path) -> Result<Self, LoadError> {
+    fn load(path: &Path) -> Result<Self, LoadError> {
         // SAFETY: native extensions are trusted code. The library remains loaded
         // for at least as long as every value and function pointer obtained from it.
         let library = {
@@ -85,28 +362,30 @@ impl LoadedExtension {
         })
     }
 
-    pub fn name(&self) -> &str {
+    fn name(&self) -> &str {
         &self.name
     }
 
-    pub fn invoke_tool(
+    fn tool_names(&self) -> impl Iterator<Item = &str> {
+        self.tool_names.iter().map(String::as_str)
+    }
+
+    fn invoke_tool(
         &mut self,
         name: &str,
         arguments: Value,
         working_directory: &Path,
     ) -> Result<ToolOutput, ToolError> {
-        if !self.tool_names.iter().any(|tool_name| tool_name == name) {
-            return Err(ToolError::new(
-                "unknown_tool",
-                format!("no loaded tool is named {name:?}"),
-            ));
-        }
-
         let index = self
             .tool_names
             .iter()
             .position(|tool_name| tool_name == name)
-            .expect("the tool name was checked above");
+            .ok_or_else(|| {
+                ToolError::new(
+                    "tool_unavailable",
+                    format!("tool {name:?} is no longer available"),
+                )
+            })?;
         let instance = self
             .instance
             .as_mut()
@@ -179,7 +458,7 @@ impl Drop for LoadedExtension {
 }
 
 #[derive(Debug)]
-pub struct LoadError {
+struct LoadError {
     message: String,
 }
 
@@ -198,3 +477,28 @@ impl fmt::Display for LoadError {
 }
 
 impl std::error::Error for LoadError {}
+
+#[derive(Debug)]
+pub struct RegistryError {
+    message: String,
+}
+
+impl RegistryError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    fn configuration(error: impl fmt::Display) -> Self {
+        Self::new(format!("invalid extension configuration: {error}"))
+    }
+}
+
+impl fmt::Display for RegistryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for RegistryError {}

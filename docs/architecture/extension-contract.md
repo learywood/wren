@@ -18,16 +18,43 @@ A `Tool` provides a name, description, JSON Schema, and synchronous invocation. 
 
 Tool references are borrowed only while the extension is loaded; Wren copies registration names for dispatch rather than retaining self-referential borrows. Extension allocations are destroyed by code from the library that created them. Wren retains the library until its extension instance has been destroyed.
 
-## Loading
+## Installation and discovery
 
-The loader accepts one explicit dynamic-library path through `wren --extension <path>`. It validates the build fingerprint, constructs the extension, initializes it, and reports its name.
+Installed extensions live in `extensions/<id>/` beside the Wren executable. `extension.toml` registers each extension without loading its library:
 
-A tool can be invoked through the same production loader:
-
-```text
-wren --extension <path> tool <name> --args <json>
+```toml
+id = "read"
+generation = "<build-id>"
+library = "generations/<build-id>/wren_read_extension.dll"
+mode = "auto"
 ```
 
-Successful tool text is written unchanged to stdout. Loading, JSON, dispatch, and tool failures are written to stderr and produce a non-zero exit status.
+The ID must match the installation directory. The library path is relative to that directory and cannot escape it. Generation-specific library paths allow later builds to be installed without overwriting code that Windows may have mapped into a running process.
 
-Discovery, installation, dependency resolution, runtime compilation, unloading, reload behavior, stdin arguments, and schema-derived CLI flags remain outside the contract.
+`cargo install-wren` installs the harness and its bundled read extension into Cargo's binary directory.
+
+## Configuration and loading
+
+Wren reads `%USERPROFILE%/.wren/config.toml`. `WREN_HOME` changes the directory containing `config.toml` for tests and development. Missing configuration is equivalent to an empty file.
+
+Installed extensions select either `auto` or `manual` loading. User configuration can override that mode and explicitly request manual extensions:
+
+```toml
+[extensions]
+load = ["database"]
+
+[extensions.read]
+mode = "manual"
+```
+
+Auto and explicitly requested extensions load before command dispatch. Loading validates the build fingerprint, initializes the extension, checks that its initialized name matches its installed ID, and rejects duplicate tool names. Libraries remain loaded for the lifetime of the process. Reloading and unloading are separate lifecycle work.
+
+A loaded tool is invoked without a library argument:
+
+```text
+wren tool read --args '{"path":"Cargo.toml"}'
+```
+
+Successful tool text is written unchanged to stdout. Configuration, discovery, loading, JSON, dispatch, and tool failures are written to stderr and produce a non-zero exit status. The former `--extension` path is not supported.
+
+Dependency resolution, runtime compilation, unloading, reload behavior, stdin arguments, and schema-derived CLI flags remain outside the contract.
