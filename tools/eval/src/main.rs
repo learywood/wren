@@ -119,10 +119,18 @@ fn hidden_actor(arguments: &[String]) -> io::Result<()> {
     }
     let workspace = Path::new(&arguments[1]);
     match arguments[0].as_str() {
-        "pass" => fs::write(
-            workspace.join("settings.txt"),
-            b"project = wren\nrelease_channel = stable\ntelemetry = disabled\n",
-        ),
+        "pass" => {
+            let path = workspace.join("settings.txt");
+            let text = fs::read_to_string(&path)?;
+            let old = "release_channel = beta";
+            if text.matches(old).count() != 1 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "validation fixture did not contain exactly one beta setting",
+                ));
+            }
+            fs::write(path, text.replace(old, "release_channel = stable"))
+        }
         "unchanged" => Ok(()),
         "timeout" => timeout_actor(Path::new(&arguments[2])),
         _ => Err(io::Error::new(
@@ -144,4 +152,33 @@ fn timeout_actor(marker: &Path) -> io::Result<()> {
         .spawn()?;
     thread::sleep(Duration::from_secs(30));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wren_test_support::IsolatedWorkspace;
+
+    #[test]
+    fn pass_actor_preserves_crlf_bytes() {
+        let mut isolated =
+            IsolatedWorkspace::create(Path::new("target/eval-tests"), "actor-crlf").unwrap();
+        let path = isolated.workspace().join("settings.txt");
+        fs::write(
+            &path,
+            b"project = wren\r\nrelease_channel = beta\r\ntelemetry = disabled\r\n",
+        )
+        .unwrap();
+        hidden_actor(&[
+            "pass".to_owned(),
+            isolated.workspace().display().to_string(),
+            isolated.root().join("unused").display().to_string(),
+        ])
+        .unwrap();
+        assert_eq!(
+            fs::read(path).unwrap(),
+            b"project = wren\r\nrelease_channel = stable\r\ntelemetry = disabled\r\n"
+        );
+        isolated.finish().unwrap();
+    }
 }
