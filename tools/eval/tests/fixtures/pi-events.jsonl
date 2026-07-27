@@ -1,0 +1,7 @@
+{"type":"future_event","new_field":{"anything":true}}
+{"type":"message_update","message":{"role":"assistant","usage":{"input":999}}}
+{"type":"message_end","unknown":"accepted","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-1","name":"read","arguments":{"path":"settings.txt"}}],"provider":"openai-codex","model":"gpt-5.6-sol","usage":{"input":10,"output":2,"cacheRead":4,"cacheWrite":1,"reasoning":3,"totalTokens":20,"futureTokens":99,"cost":{"total":0.1,"future":8}},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"call-1","toolName":"read","args":{"path":"settings.txt"},"future":true}
+{"type":"tool_execution_end","toolCallId":"call-1","toolName":"read","result":{"content":[{"type":"text","text":"value"}]},"isError":false,"future":true}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"input":5,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":6,"cost":{"total":0.15}},"stopReason":"stop"}}
+{"type":"agent_settled"}

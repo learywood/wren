@@ -82,6 +82,11 @@ pub fn pi_child(home: &Path) -> EnvironmentPolicy {
 }
 
 #[must_use]
+pub fn pi_environment_child(home: &Path, pi_home: &Path) -> EnvironmentPolicy {
+    pi_child(home).set("PI_CODING_AGENT_DIR", pi_home.as_os_str())
+}
+
+#[must_use]
 pub fn verifier_child() -> EnvironmentPolicy {
     ["SystemRoot", "WINDIR", "TEMP", "TMP"]
         .into_iter()

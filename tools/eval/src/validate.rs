@@ -13,7 +13,7 @@ use wren_test_support::{
 };
 
 use crate::{
-    harness,
+    harness, pi_json,
     schema::{
         AttemptResult, Classification, EvidenceKind, Failure, HarnessProcess, HarnessSummary,
         Metrics, ReasonCode, RunRecord, SCHEMA_VERSION, Transcript, VerifierResult, classify,
@@ -78,6 +78,7 @@ pub fn validate(repository: &Path) -> io::Result<PathBuf> {
             loaded.config.summary(loaded.hash.clone()),
         );
     }
+    validate_protocol_fixtures()?;
     let task = tasks
         .iter()
         .find(|task| task.manifest.id == "exact-file-edit")
@@ -285,7 +286,7 @@ fn run_actor(
     Ok(result)
 }
 
-fn initialize_git(git: &Path, workspace: &Path, artifacts: &Path) -> io::Result<()> {
+pub fn initialize_git(git: &Path, workspace: &Path, artifacts: &Path) -> io::Result<()> {
     for arguments in [
         vec!["init", "--quiet"],
         vec!["add", "--all"],
@@ -341,7 +342,7 @@ fn run_checked(
     Ok(())
 }
 
-fn process_failure(process: &wren_test_support::ProcessResult) -> Option<Failure> {
+pub fn process_failure(process: &wren_test_support::ProcessResult) -> Option<Failure> {
     if process.timed_out {
         Some(failure(ReasonCode::Timeout, "harness timed out"))
     } else if process.tree_cleanup != TreeCleanup::Clean {
@@ -359,7 +360,7 @@ fn process_failure(process: &wren_test_support::ProcessResult) -> Option<Failure
     }
 }
 
-fn verifier_failure(verifier: &crate::verifier::VerifierExecution) -> Option<Failure> {
+pub fn verifier_failure(verifier: &crate::verifier::VerifierExecution) -> Option<Failure> {
     if verifier.timed_out {
         Some(failure(ReasonCode::VerifierTimeout, "verifier timed out"))
     } else if verifier.tree_cleanup != TreeCleanup::Clean || verifier.exit_code != Some(0) {
@@ -375,6 +376,16 @@ fn verifier_failure(verifier: &crate::verifier::VerifierExecution) -> Option<Fai
     } else {
         None
     }
+}
+
+fn validate_protocol_fixtures() -> io::Result<()> {
+    let transcript = pi_json::normalize(include_bytes!("../tests/fixtures/pi-events.jsonl"))?;
+    let bytes = serde_json::to_vec(&transcript).map_err(io::Error::other)?;
+    let round_trip: Transcript = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+    if round_trip != transcript {
+        return Err(io::Error::other("normalized transcript did not round-trip"));
+    }
+    Ok(())
 }
 
 fn failure(code: ReasonCode, message: &str) -> Failure {
@@ -394,14 +405,14 @@ fn count(results: &[AttemptResult], class: Classification) -> u32 {
     .expect("attempt count fits u32")
 }
 
-const fn tree_cleanup_name(cleanup: TreeCleanup) -> &'static str {
+pub const fn tree_cleanup_name(cleanup: TreeCleanup) -> &'static str {
     match cleanup {
         TreeCleanup::Clean => "clean",
         TreeCleanup::Terminated => "terminated",
     }
 }
 
-fn unique_id() -> io::Result<String> {
+pub fn unique_id() -> io::Result<String> {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(io::Error::other)?
@@ -409,7 +420,7 @@ fn unique_id() -> io::Result<String> {
     Ok(format!("{nanos}-{}", std::process::id()))
 }
 
-fn unix_millis() -> io::Result<u64> {
+pub fn unix_millis() -> io::Result<u64> {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(io::Error::other)?
@@ -417,6 +428,6 @@ fn unix_millis() -> io::Result<u64> {
     u64::try_from(millis).map_err(io::Error::other)
 }
 
-fn millis(duration: Duration) -> u64 {
+pub fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }

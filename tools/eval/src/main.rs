@@ -1,6 +1,9 @@
 #![allow(clippy::missing_errors_doc)]
 
 mod harness;
+mod pi;
+mod pi_json;
+mod run;
 mod schema;
 mod task;
 mod validate;
@@ -33,15 +36,68 @@ fn execute() -> io::Result<()> {
         }
         Some("__verify-exact-tree") => verifier::hidden_verify(&arguments[1..]),
         Some("__actor") => hidden_actor(&arguments[1..]),
-        Some("run") => Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "harness adapters are not available yet",
-        )),
+        Some("run") => {
+            let options = parse_run_options(&arguments[1..])?;
+            if run::run(&repository(), &options)? {
+                Ok(())
+            } else {
+                Err(io::Error::other(
+                    "one or more evaluation attempts did not pass",
+                ))
+            }
+        }
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "usage: wren-eval validate | wren-eval run <pi|codex> <task> --attempts <n> [--config <path>] [--output <directory>]",
+            "usage: wren-eval validate | wren-eval run pi <task> --attempts <n> [--config <path>] [--output <directory>]",
         )),
     }
+}
+
+fn parse_run_options(arguments: &[String]) -> io::Result<run::RunOptions> {
+    if arguments.len() < 4 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "run requires harness, task, and --attempts <n>",
+        ));
+    }
+    let mut attempts = None;
+    let mut config = None;
+    let mut output = None;
+    let mut index = 2_usize;
+    while index < arguments.len() {
+        let value = arguments.get(index + 1).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} requires a value", arguments[index]),
+            )
+        })?;
+        match arguments[index].as_str() {
+            "--attempts" => {
+                attempts = Some(
+                    value
+                        .parse::<u32>()
+                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
+                );
+            }
+            "--config" => config = Some(PathBuf::from(value)),
+            "--output" => output = Some(PathBuf::from(value)),
+            option => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown run option: {option}"),
+                ));
+            }
+        }
+        index += 2;
+    }
+    Ok(run::RunOptions {
+        harness_kind: arguments[0].clone(),
+        task_id: arguments[1].clone(),
+        attempts: attempts
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "--attempts is required"))?,
+        config,
+        output,
+    })
 }
 
 fn repository() -> PathBuf {
