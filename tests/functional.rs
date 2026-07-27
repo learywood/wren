@@ -21,14 +21,28 @@ static FIXTURE_EXTENSION: OnceLock<PathBuf> = OnceLock::new();
 static NEXT_CAPTURE: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
-fn installed_release_starts_and_auto_loads_packaged_read_extension() {
+fn installed_release_starts_and_auto_loads_packaged_read_and_write_extensions() {
     let mut harness = HarnessInstallation::new();
+    assert!(harness.installation.read_library().is_file());
+    assert!(harness.installation.write_library().is_file());
     assert_success(&harness.run(Path::new("."), []), "");
     assert_success(
         &harness.invoke_tool(Path::new("."), "read", r#"{"path":"Cargo.toml"}"#),
         &fs::read_to_string("Cargo.toml")
             .expect("Cargo.toml should be readable")
             .replace("\r\n", "\n"),
+    );
+    assert_success(
+        &harness.invoke_tool(
+            harness.workspace(),
+            "write",
+            r#"{"path":"packaged.txt","content":"loaded"}"#,
+        ),
+        "Successfully wrote 6 bytes to packaged.txt",
+    );
+    assert_eq!(
+        fs::read(harness.workspace().join("packaged.txt")).unwrap(),
+        b"loaded"
     );
     harness.finish();
 }
@@ -270,6 +284,167 @@ fn read_tool_reports_structured_errors_through_the_installed_release() {
     harness.finish();
 }
 
+#[test]
+fn write_tool_creates_replaces_and_empties_exact_files_through_the_installed_release() {
+    let mut harness = HarnessInstallation::new();
+
+    let relative_content = "\u{feff}hé\r\nlast line without newline";
+    let relative_arguments = serde_json::json!({
+        "path": "nested\\more\\exact.txt",
+        "content": relative_content,
+    })
+    .to_string();
+    assert_success(
+        &invoke_write(&harness, relative_arguments),
+        &format!(
+            "Successfully wrote {} bytes to nested\\more\\exact.txt",
+            relative_content.len()
+        ),
+    );
+    assert_eq!(
+        fs::read(harness.workspace().join("nested/more/exact.txt")).unwrap(),
+        relative_content.as_bytes()
+    );
+
+    let absolute_path = harness.workspace().join("absolute.txt");
+    fs::write(&absolute_path, b"a much longer original value").unwrap();
+    let absolute_arguments = serde_json::json!({
+        "path": absolute_path,
+        "content": "short",
+    })
+    .to_string();
+    assert_success(
+        &invoke_write(&harness, absolute_arguments),
+        &format!("Successfully wrote 5 bytes to {}", absolute_path.display()),
+    );
+    assert_eq!(fs::read(&absolute_path).unwrap(), b"short");
+
+    assert_success(
+        &invoke_write(
+            &harness,
+            serde_json::json!({"path": "empty.txt", "content": ""}).to_string(),
+        ),
+        "Successfully wrote 0 bytes to empty.txt",
+    );
+    assert_eq!(
+        fs::metadata(harness.workspace().join("empty.txt"))
+            .unwrap()
+            .len(),
+        0
+    );
+    harness.finish();
+}
+
+#[test]
+fn write_tool_rejects_invalid_arguments_through_the_installed_release() {
+    let mut harness = HarnessInstallation::new();
+
+    assert_error_prefix(
+        &invoke_write(&harness, "{"),
+        "invalid_arguments",
+        "--args is not valid JSON: ",
+    );
+    for arguments in [
+        serde_json::json!({}).to_string(),
+        serde_json::json!({"path": "missing-content.txt"}).to_string(),
+        serde_json::json!({"content": "missing path"}).to_string(),
+        serde_json::json!({"path": 1, "content": "text"}).to_string(),
+        serde_json::json!({"path": "wrong.txt", "content": false}).to_string(),
+        serde_json::json!({"path": "unknown.txt", "content": "text", "extra": true}).to_string(),
+    ] {
+        assert_error_prefix(
+            &invoke_write(&harness, arguments),
+            "invalid_arguments",
+            "invalid write arguments: ",
+        );
+    }
+    assert_error_prefix(
+        &invoke_write(
+            &harness,
+            serde_json::json!({"path": "", "content": ""}).to_string(),
+        ),
+        "invalid_arguments",
+        "path must not be empty",
+    );
+    harness.finish();
+}
+
+#[test]
+fn write_tool_rejects_invalid_destinations_through_the_installed_release() {
+    let mut harness = HarnessInstallation::new();
+
+    let directory = harness.workspace().join("directory");
+    fs::create_dir(&directory).unwrap();
+    assert_error_prefix(
+        &invoke_write(
+            &harness,
+            serde_json::json!({"path": "directory", "content": "text"}).to_string(),
+        ),
+        "not_regular_file",
+        &format!("{} is not a regular file", windows_display_path(&directory)),
+    );
+
+    fs::write(harness.workspace().join("parent-file"), b"original").unwrap();
+    assert_error_prefix(
+        &invoke_write(
+            &harness,
+            serde_json::json!({"path": "parent-file\\child.txt", "content": "text"}).to_string(),
+        ),
+        "invalid_destination",
+        "could not create parent directories for ",
+    );
+
+    let target = harness.workspace().join("junction-target");
+    let junction = harness.workspace().join("junction");
+    fs::create_dir(&target).unwrap();
+    create_directory_junction(&junction, &target);
+    assert_error_prefix(
+        &invoke_write(
+            &harness,
+            serde_json::json!({"path": "junction", "content": "text"}).to_string(),
+        ),
+        "unsupported_reparse_point",
+        &format!("{} is a reparse point;", windows_display_path(&junction)),
+    );
+    assert!(fs::read_dir(&target).unwrap().next().is_none());
+    fs::remove_dir(junction).unwrap();
+    harness.finish();
+}
+
+#[test]
+fn write_tool_respects_windows_locks_and_read_only_attributes() {
+    let mut harness = HarnessInstallation::new();
+
+    let locked_path = harness.workspace().join("locked-write.txt");
+    fs::write(&locked_path, b"locked original").unwrap();
+    let locked_file = open_without_sharing(&locked_path);
+    assert_error_prefix(
+        &invoke_write(
+            &harness,
+            serde_json::json!({"path": "locked-write.txt", "content": "replacement"}).to_string(),
+        ),
+        "permission_denied",
+        "could not open for writing ",
+    );
+    drop(locked_file);
+    assert_eq!(fs::read(&locked_path).unwrap(), b"locked original");
+
+    let read_only_path = harness.workspace().join("read-only.txt");
+    fs::write(&read_only_path, b"read-only original").unwrap();
+    let read_only = ReadOnlyGuard::new(&read_only_path);
+    assert_error_prefix(
+        &invoke_write(
+            &harness,
+            serde_json::json!({"path": "read-only.txt", "content": "replacement"}).to_string(),
+        ),
+        "permission_denied",
+        "could not open for writing ",
+    );
+    assert_eq!(fs::read(&read_only_path).unwrap(), b"read-only original");
+    read_only.restore();
+    harness.finish();
+}
+
 fn release_installation() -> &'static ReleaseInstallation {
     RELEASE_INSTALLATION.get_or_init(|| {
         let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -323,6 +498,14 @@ fn invoke_read(harness: &HarnessInstallation, arguments: impl AsRef<str>) -> Har
     harness.invoke_tool(harness.workspace(), "read", arguments.as_ref())
 }
 
+fn invoke_write(harness: &HarnessInstallation, arguments: impl AsRef<str>) -> HarnessOutput {
+    harness.invoke_tool(harness.workspace(), "write", arguments.as_ref())
+}
+
+fn windows_display_path(path: &Path) -> String {
+    path.to_string_lossy().replace('/', "\\")
+}
+
 fn assert_success(output: &HarnessOutput, expected_stdout: &str) {
     assert!(
         output.succeeded(),
@@ -347,6 +530,20 @@ fn assert_error(output: &HarnessOutput, kind: &str) {
     );
 }
 
+fn assert_error_prefix(output: &HarnessOutput, kind: &str, prefix: &str) {
+    assert!(!output.succeeded(), "Wren unexpectedly succeeded");
+    assert!(
+        output.stdout.is_empty(),
+        "failed tools must not write stdout"
+    );
+    let expected = format!("wren: {kind}: {prefix}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains(&expected),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn assert_stderr_contains(output: &HarnessOutput, expected: &str) {
     assert!(!output.succeeded(), "Wren unexpectedly succeeded");
     assert!(
@@ -365,6 +562,57 @@ fn open_without_sharing(path: &Path) -> fs::File {
         .share_mode(0)
         .open(path)
         .expect("locked fixture should open")
+}
+
+fn create_directory_junction(junction: &Path, target: &Path) {
+    let output = Command::new("cmd.exe")
+        .args(["/D", "/C", "mklink", "/J"])
+        .arg(windows_display_path(junction))
+        .arg(windows_display_path(target))
+        .output()
+        .expect("cmd.exe should create the junction fixture");
+    assert!(
+        output.status.success(),
+        "mklink failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+struct ReadOnlyGuard {
+    path: PathBuf,
+    original_permissions: fs::Permissions,
+    restored: bool,
+}
+
+impl ReadOnlyGuard {
+    fn new(path: &Path) -> Self {
+        let original_permissions = fs::metadata(path).unwrap().permissions();
+        let mut read_only_permissions = original_permissions.clone();
+        read_only_permissions.set_readonly(true);
+        fs::set_permissions(path, read_only_permissions).unwrap();
+        Self {
+            path: path.to_owned(),
+            original_permissions,
+            restored: false,
+        }
+    }
+
+    fn restore(mut self) {
+        self.restore_inner();
+    }
+
+    fn restore_inner(&mut self) {
+        if !self.restored {
+            fs::set_permissions(&self.path, self.original_permissions.clone()).unwrap();
+            self.restored = true;
+        }
+    }
+}
+
+impl Drop for ReadOnlyGuard {
+    fn drop(&mut self) {
+        self.restore_inner();
+    }
 }
 
 struct HarnessInstallation {

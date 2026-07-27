@@ -16,6 +16,7 @@ pub struct ReleaseInstallation {
     root: PathBuf,
     executable: PathBuf,
     read_library: PathBuf,
+    write_library: PathBuf,
 }
 
 impl ReleaseInstallation {
@@ -52,33 +53,14 @@ impl ReleaseInstallation {
         let executable = root.join("bin").join("wren.exe");
         require_regular_file(&executable, "installed Wren executable")?;
 
-        let extension_directory = root.join("bin").join("extensions").join("read");
-        let manifest_path = extension_directory.join("extension.toml");
-        require_regular_file(&manifest_path, "installed read manifest")?;
-        let manifest: ExtensionManifest = toml::from_str(&fs::read_to_string(&manifest_path)?)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        if manifest.id != "read" || manifest.generation.is_empty() || manifest.mode != "auto" {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "installed read manifest has an invalid identity, generation, or mode",
-            ));
-        }
-        let relative_library = Path::new(&manifest.library);
-        require_contained_relative_path(relative_library)?;
-        let expected_prefix = Path::new("generations").join(&manifest.generation);
-        if !relative_library.starts_with(&expected_prefix) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "installed read library is outside its selected generation",
-            ));
-        }
-        let read_library = extension_directory.join(relative_library);
-        require_regular_file(&read_library, "installed read generation library")?;
+        let read_library = installed_extension_library(root, "read")?;
+        let write_library = installed_extension_library(root, "write")?;
 
         Ok(Self {
             root: root.to_owned(),
             executable,
             read_library,
+            write_library,
         })
     }
 
@@ -102,6 +84,37 @@ impl ReleaseInstallation {
     pub fn read_library(&self) -> &Path {
         &self.read_library
     }
+
+    #[must_use]
+    pub fn write_library(&self) -> &Path {
+        &self.write_library
+    }
+}
+
+fn installed_extension_library(root: &Path, id: &str) -> io::Result<PathBuf> {
+    let extension_directory = root.join("bin").join("extensions").join(id);
+    let manifest_path = extension_directory.join("extension.toml");
+    require_regular_file(&manifest_path, &format!("installed {id} manifest"))?;
+    let manifest: ExtensionManifest = toml::from_str(&fs::read_to_string(&manifest_path)?)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if manifest.id != id || manifest.generation.is_empty() || manifest.mode != "auto" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("installed {id} manifest has an invalid identity, generation, or mode"),
+        ));
+    }
+    let relative_library = Path::new(&manifest.library);
+    require_contained_relative_path(relative_library)?;
+    let expected_prefix = Path::new("generations").join(&manifest.generation);
+    if !relative_library.starts_with(&expected_prefix) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("installed {id} library is outside its selected generation"),
+        ));
+    }
+    let library = extension_directory.join(relative_library);
+    require_regular_file(&library, &format!("installed {id} generation library"))?;
+    Ok(library)
 }
 
 #[derive(Deserialize)]

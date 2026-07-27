@@ -31,7 +31,7 @@ mode = "auto"
 
 The ID must match the installation directory. The library path is relative to that directory and cannot escape it. Generation-specific library paths allow later builds to be installed without overwriting code that Windows may have mapped into a running process.
 
-`cargo install-wren` installs the harness and its bundled read extension into Cargo's binary directory.
+`cargo install-wren` installs the harness and its bundled read and write extensions into Cargo's binary directory.
 
 ## Configuration and loading
 

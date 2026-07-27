@@ -3,6 +3,7 @@ members = [
     ".",
     "crates/wren-extension",
     "extensions/read",
+    "extensions/write",
     "tests/fixtures/extension",
     "tools/eval",
     "tools/install",

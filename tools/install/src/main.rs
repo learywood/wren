@@ -36,6 +36,8 @@ fn install() -> Result<PathBuf, String> {
             "wren",
             "--package",
             "wren-read-extension",
+            "--package",
+            "wren-write-extension",
             "--target-dir",
         ])
         .arg(&target)
@@ -55,18 +57,31 @@ fn install() -> Result<PathBuf, String> {
     let installed_executable = bin.join(&executable_name);
     copy(&built_executable, &installed_executable)?;
 
+    let release = target.join("release");
+    install_extension(&bin, &release, "read", "wren_read_extension")?;
+    install_extension(&bin, &release, "write", "wren_write_extension")?;
+
+    Ok(installed_executable)
+}
+
+fn install_extension(
+    bin: &Path,
+    release: &Path,
+    id: &str,
+    library_stem: &str,
+) -> Result<(), String> {
     let library_name = format!(
-        "{}wren_read_extension{}",
+        "{}{library_stem}{}",
         env::consts::DLL_PREFIX,
         env::consts::DLL_SUFFIX
     );
-    let built_library = target.join("release").join(&library_name);
+    let built_library = release.join(&library_name);
     let library_bytes = fs::read(&built_library)
         .map_err(|error| format!("could not read {}: {error}", built_library.display()))?;
     let mut hasher = DefaultHasher::new();
     hasher.write(&library_bytes);
     let generation = format!("{:016x}", hasher.finish());
-    let extension = bin.join("extensions").join("read");
+    let extension = bin.join("extensions").join(id);
     let generation_directory = extension.join("generations").join(&generation);
     fs::create_dir_all(&generation_directory).map_err(|error| {
         format!(
@@ -82,16 +97,12 @@ fn install() -> Result<PathBuf, String> {
 
     let relative_library = format!("generations/{generation}/{library_name}");
     let manifest = format!(
-        "id = \"read\"\ngeneration = \"{generation}\"\nlibrary = \"{relative_library}\"\nmode = \"auto\"\n"
+        "id = \"{id}\"\ngeneration = \"{generation}\"\nlibrary = \"{relative_library}\"\nmode = \"auto\"\n"
     );
-    fs::write(extension.join("extension.toml"), manifest).map_err(|error| {
-        format!(
-            "could not write {}: {error}",
-            extension.join("extension.toml").display()
-        )
-    })?;
-
-    Ok(installed_executable)
+    let manifest_path = extension.join("extension.toml");
+    fs::write(&manifest_path, manifest)
+        .map_err(|error| format!("could not write {}: {error}", manifest_path.display()))?;
+    Ok(())
 }
 
 fn installation_root() -> Result<PathBuf, String> {
