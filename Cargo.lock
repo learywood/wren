@@ -650,6 +650,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wren-write-extension"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "wren-extension",
+]
+
+[[package]]
 name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
