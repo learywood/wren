@@ -49,9 +49,15 @@ mode = "manual"
 
 Auto and explicitly requested extensions load before command dispatch. Loading validates the build fingerprint, initializes the extension, checks that its initialized name matches its installed ID, and rejects duplicate tool names. Libraries remain loaded for the lifetime of the process. Reloading and unloading are separate lifecycle work.
 
-A loaded tool is invoked without a library argument:
+A loaded tool is invoked without a library argument. Windows PowerShell 5.1 requires the JSON quotes to be escaped for native argument passing:
 
-```text
+```powershell
+wren tool read --args '{\"path\":\"Cargo.toml\"}'
+```
+
+PowerShell 7 accepts the JSON directly:
+
+```powershell
 wren tool read --args '{"path":"Cargo.toml"}'
 ```
 

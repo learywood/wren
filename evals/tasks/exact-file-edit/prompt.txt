@@ -1,0 +1,1 @@
+In `settings.txt`, change `release_channel = beta` to `release_channel = stable`. Make no other changes.

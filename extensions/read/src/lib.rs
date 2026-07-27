@@ -151,10 +151,10 @@ fn read_path(path: &Path, offset: usize, requested_limit: usize) -> Result<ToolO
     format_output(&collected, offset)
 }
 
-fn seek_to_line(reader: &mut BufReader<File>, offset: usize, path: &Path) -> Result<(), ToolError> {
+fn seek_to_line<R: BufRead>(reader: &mut R, offset: usize, path: &Path) -> Result<(), ToolError> {
     let mut line = 1_usize;
     while line < offset {
-        let consumed = {
+        let (consumed, ended_line) = {
             let buffer = reader
                 .fill_buf()
                 .map_err(|error| map_io_error(error, "read", path))?;
@@ -164,11 +164,8 @@ fn seek_to_line(reader: &mut BufReader<File>, offset: usize, path: &Path) -> Res
                     format!("offset {offset} is beyond the end of the file"),
                 ));
             }
-            memchr(b'\n', buffer).map_or(buffer.len(), |index| index + 1)
-        };
-        let ended_line = {
-            let buffer = reader.buffer();
-            buffer.get(consumed - 1) == Some(&b'\n')
+            let consumed = memchr(b'\n', buffer).map_or(buffer.len(), |index| index + 1);
+            (consumed, buffer.get(consumed - 1) == Some(&b'\n'))
         };
         reader.consume(consumed);
         if ended_line {
@@ -205,8 +202,8 @@ impl TruncationReason {
     }
 }
 
-fn collect(
-    reader: &mut BufReader<File>,
+fn collect<R: BufRead>(
+    reader: &mut R,
     line_limit: usize,
     limit_reason: TruncationReason,
     path: &Path,
@@ -327,7 +324,7 @@ fn normalized_line_delta(output: &[u8], before_newline: &[u8]) -> usize {
     }
 }
 
-fn has_more(reader: &mut BufReader<File>, path: &Path) -> Result<bool, ToolError> {
+fn has_more<R: BufRead>(reader: &mut R, path: &Path) -> Result<bool, ToolError> {
     reader
         .fill_buf()
         .map(|buffer| !buffer.is_empty())
@@ -462,3 +459,135 @@ fn map_io_error(error: io::Error, operation: &str, path: &Path) -> ToolError {
 }
 
 wren_extension::export_extension!(ReadExtension::default());
+
+#[cfg(test)]
+mod tests {
+    use std::io::{BufReader, Cursor};
+
+    use super::*;
+
+    fn test_path() -> &'static Path {
+        Path::new("fixture.txt")
+    }
+
+    #[test]
+    fn arguments_apply_defaults_and_reject_empty_or_zero_values() {
+        let arguments: ReadArguments =
+            serde_json::from_value(json!({"path": "sample.txt"})).unwrap();
+        assert_eq!(arguments.offset, 1);
+        assert_eq!(arguments.limit, MAX_LINES);
+        assert!(arguments.validate().is_ok());
+
+        for value in [
+            json!({"path": ""}),
+            json!({"path": "sample.txt", "offset": 0}),
+            json!({"path": "sample.txt", "limit": 0}),
+        ] {
+            let arguments: ReadArguments = serde_json::from_value(value).unwrap();
+            assert_eq!(
+                arguments.validate().unwrap_err().kind(),
+                "invalid_arguments"
+            );
+        }
+    }
+
+    #[test]
+    fn requested_limit_reports_next_offset() {
+        let output = collect_output(b"one\ntwo\nthree\n", 2, TruncationReason::Requested);
+        assert_eq!(
+            output.text(),
+            "one\ntwo\n\n[Showing lines 1-2. Use offset=3 to continue.]"
+        );
+        assert_eq!(
+            output.details(),
+            &json!({
+                "start_line": 1,
+                "end_line": 2,
+                "truncated": true,
+                "truncation_reason": "requested_limit",
+                "next_offset": 3,
+            })
+        );
+    }
+
+    #[test]
+    fn line_limit_distinguishes_exactly_two_thousand_from_more() {
+        let exact = "x\n".repeat(MAX_LINES);
+        let output = collect_output(exact.as_bytes(), MAX_LINES, TruncationReason::Lines);
+        assert!(!output.details()["truncated"].as_bool().unwrap());
+        assert!(!output.text().contains("Use offset="));
+
+        let extra = "x\n".repeat(MAX_LINES + 1);
+        let output = collect_output(extra.as_bytes(), MAX_LINES, TruncationReason::Lines);
+        assert_eq!(output.details()["truncation_reason"], "line_limit");
+        assert!(output.text().ends_with("Use offset=2001 to continue.]"));
+    }
+
+    #[test]
+    fn normalizes_crlf_split_across_reader_buffer_boundary() {
+        let mut reader = BufReader::with_capacity(2, Cursor::new(b"a\r\nb\r\n"));
+        let collected =
+            collect(&mut reader, MAX_LINES, TruncationReason::Lines, test_path()).unwrap();
+        let output = format_output(&collected, 1).unwrap();
+        assert_eq!(output.text(), "a\nb\n");
+    }
+
+    #[test]
+    fn byte_truncation_does_not_split_multibyte_utf8_and_fits_notice() {
+        let text = format!("a{}", "é".repeat(30_000));
+        let output = collect_output(text.as_bytes(), MAX_LINES, TruncationReason::Lines);
+        assert!(output.text().is_char_boundary(output.text().len()));
+        assert!(output.text().len() <= MAX_OUTPUT_BYTES);
+        assert!(output.text().contains("[Line 1 truncated.]"));
+        assert!(
+            output
+                .text()
+                .ends_with("[Showing lines 1-1. Use offset=2 to continue.]")
+        );
+        assert_eq!(output.details()["truncation_reason"], "byte_limit");
+    }
+
+    #[test]
+    fn complete_lines_are_removed_until_the_continuation_notice_fits() {
+        let line = format!("{}\n", "a".repeat(25_580));
+        let input = format!("{line}{line}{}\n", "tail".repeat(100));
+        let output = collect_output(input.as_bytes(), MAX_LINES, TruncationReason::Lines);
+        assert!(output.text().len() <= MAX_OUTPUT_BYTES);
+        assert_eq!(output.details()["end_line"], 1);
+        assert_eq!(output.details()["next_offset"], 2);
+        assert_eq!(output.details()["truncation_reason"], "byte_limit");
+    }
+
+    #[test]
+    fn notice_separator_handles_empty_terminated_and_unterminated_text() {
+        assert_eq!(notice_separator(b""), "");
+        assert_eq!(notice_separator(b"line\n"), "\n");
+        assert_eq!(notice_separator(b"line"), "\n\n");
+    }
+
+    #[test]
+    fn decode_prefix_drops_only_an_incomplete_final_character() {
+        assert_eq!(decode_prefix(b"ok\xc3").unwrap(), "ok");
+        assert_eq!(decode_prefix(b"ok\xc3\xa9").unwrap(), "oké");
+        assert_eq!(decode_prefix(b"ok\xff").unwrap_err().kind(), "invalid_utf8");
+        assert_eq!(
+            decode_complete(b"ok\xff").unwrap_err().kind(),
+            "invalid_utf8"
+        );
+    }
+
+    #[test]
+    fn seeking_works_with_generic_buffered_readers() {
+        let mut reader = BufReader::with_capacity(1, Cursor::new(b"one\ntwo\n"));
+        seek_to_line(&mut reader, 2, test_path()).unwrap();
+        let collected =
+            collect(&mut reader, MAX_LINES, TruncationReason::Lines, test_path()).unwrap();
+        assert_eq!(format_output(&collected, 2).unwrap().text(), "two\n");
+    }
+
+    fn collect_output(input: &[u8], limit: usize, reason: TruncationReason) -> ToolOutput {
+        let mut reader = BufReader::new(Cursor::new(input));
+        let collected = collect(&mut reader, limit, reason, test_path()).unwrap();
+        format_output(&collected, 1).unwrap()
+    }
+}

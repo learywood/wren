@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"synthetic","future":true}
+{"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":"working","future":"accepted"}}
+{"type":"item.completed","item":{"id":"unknown-1","type":"future_item","value":42}}
+{"type":"item.completed","item":{"id":"command-1","type":"command_execution","command":"type settings.txt","aggregated_output":"value","exit_code":0,"status":"completed","future":true}}
+{"type":"item.completed","item":{"id":"message-2","type":"agent_message","text":"done"}}
+{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":40,"cache_write_input_tokens":5,"output_tokens":12,"reasoning_output_tokens":3,"future_tokens":99},"future":true}

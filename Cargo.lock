@@ -589,6 +589,18 @@ dependencies = [
  "toml",
  "tracy-client",
  "wren-extension",
+ "wren-test-support",
+]
+
+[[package]]
+name = "wren-eval"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml",
+ "wren-test-support",
 ]
 
 [[package]]
@@ -625,6 +637,16 @@ dependencies = [
  "serde",
  "serde_json",
  "wren-extension",
+]
+
+[[package]]
+name = "wren-test-support"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "toml",
+ "windows-sys",
 ]
 
 [[package]]

@@ -23,6 +23,10 @@ All documentation belongs in `/docs/`:
 
 Keep documentation close to demonstrated needs; do not add speculative documents.
 
+## Build Workflow
+
+Always build the complete optimized Wren installation with `cargo install-wren`. This installs the release executable and bundled extensions into Cargo's binary directory on `PATH`; do not stop at a debug or intermediate build artifact.
+
 ## Performance Backpressure
 
 For changes that may affect startup or performance-sensitive runtime paths:
@@ -37,6 +41,7 @@ For changes that may affect startup or performance-sensitive runtime paths:
 
 ## GitHub Issues Workflow
 
+- Read an issue in full with `gh issue view <number> --json number,title,state,author,createdAt,updatedAt,body,comments,url`; review every comment in order and treat later superseding updates as authoritative. Prefer this over browser retrieval or bare `--comments`, which may query deprecated GitHub Projects fields.
 - Use GitHub issues for feature work, bug fixes, and other substantive code changes.
 - Create a new issue before starting any new feature.
 - Small conversational tasks, including adding or modifying documentation, do not require an issue.
