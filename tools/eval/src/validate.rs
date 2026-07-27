@@ -13,7 +13,7 @@ use wren_test_support::{
 };
 
 use crate::{
-    harness, pi_json,
+    codex_json, harness, pi_json,
     schema::{
         AttemptResult, Classification, EvidenceKind, Failure, HarnessProcess, HarnessSummary,
         Metrics, ReasonCode, RunRecord, SCHEMA_VERSION, Transcript, VerifierResult, classify,
@@ -379,11 +379,15 @@ pub fn verifier_failure(verifier: &crate::verifier::VerifierExecution) -> Option
 }
 
 fn validate_protocol_fixtures() -> io::Result<()> {
-    let transcript = pi_json::normalize(include_bytes!("../tests/fixtures/pi-events.jsonl"))?;
-    let bytes = serde_json::to_vec(&transcript).map_err(io::Error::other)?;
-    let round_trip: Transcript = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-    if round_trip != transcript {
-        return Err(io::Error::other("normalized transcript did not round-trip"));
+    for transcript in [
+        pi_json::normalize(include_bytes!("../tests/fixtures/pi-events.jsonl"))?,
+        codex_json::normalize(include_bytes!("../tests/fixtures/codex-events.jsonl"))?,
+    ] {
+        let bytes = serde_json::to_vec(&transcript).map_err(io::Error::other)?;
+        let round_trip: Transcript = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+        if round_trip != transcript {
+            return Err(io::Error::other("normalized transcript did not round-trip"));
+        }
     }
     Ok(())
 }

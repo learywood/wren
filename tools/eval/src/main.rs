@@ -1,5 +1,7 @@
 #![allow(clippy::missing_errors_doc)]
 
+mod codex;
+mod codex_json;
 mod harness;
 mod pi;
 mod pi_json;
@@ -48,7 +50,7 @@ fn execute() -> io::Result<()> {
         }
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "usage: wren-eval validate | wren-eval run pi <task> --attempts <n> [--config <path>] [--output <directory>]",
+            "usage: wren-eval validate | wren-eval run <pi|codex> <task> --attempts <n> [--config <path>] [--output <directory>]",
         )),
     }
 }

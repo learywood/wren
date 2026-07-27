@@ -15,6 +15,17 @@ const PI_SESSION_VARIABLES: [&str; 6] = [
     "PI_REASONING_LEVEL",
 ];
 
+const CODEX_EXECUTION_VARIABLES: [&str; 8] = [
+    "CODEX_SANDBOX",
+    "CODEX_SANDBOX_NETWORK_DISABLED",
+    "CODEX_PERMISSION_PROFILE",
+    "CODEX_NON_INTERACTIVE",
+    "CODEX_CI",
+    "CODEX_STARTING_DIFF",
+    "CODEX_ROLLOUT_TRACE_ROOT",
+    "CODEX_THREAD_ID",
+];
+
 /// An explicit policy for the environment inherited by a child process.
 pub struct EnvironmentPolicy {
     clear: bool,
@@ -87,6 +98,30 @@ pub fn pi_environment_child(home: &Path, pi_home: &Path) -> EnvironmentPolicy {
 }
 
 #[must_use]
+pub fn codex_local_child(home: &Path) -> EnvironmentPolicy {
+    scrub_codex_execution(pi_child(home))
+        .remove("CODEX_API_KEY")
+        .remove("OPENAI_API_KEY")
+}
+
+#[must_use]
+pub fn codex_environment_child(home: &Path, codex_home: &Path) -> EnvironmentPolicy {
+    scrub_codex_execution(pi_child(home))
+        .remove("OPENAI_API_KEY")
+        .set("CODEX_HOME", codex_home.as_os_str())
+}
+
+fn scrub_codex_execution(policy: EnvironmentPolicy) -> EnvironmentPolicy {
+    let policy = CODEX_EXECUTION_VARIABLES
+        .iter()
+        .copied()
+        .fold(policy, EnvironmentPolicy::remove);
+    env::vars_os()
+        .filter(|(name, _)| name.to_string_lossy().starts_with("CODEX_NETWORK_"))
+        .fold(policy, |policy, (name, _)| policy.remove(name))
+}
+
+#[must_use]
 pub fn verifier_child() -> EnvironmentPolicy {
     ["SystemRoot", "WINDIR", "TEMP", "TMP"]
         .into_iter()
@@ -123,5 +158,23 @@ mod tests {
         assert!(policy.clear);
         assert!(!has_variable(&policy, OsStr::new("OPENAI_API_KEY")));
         assert!(!has_variable(&policy, OsStr::new("PI_CODING_AGENT_DIR")));
+    }
+
+    #[test]
+    fn codex_children_scrub_execution_metadata_and_select_auth_mode() {
+        let local = codex_local_child(Path::new(r"C:\wren-home"));
+        for variable in CODEX_EXECUTION_VARIABLES {
+            assert!(local.removed.contains(OsStr::new(variable)));
+        }
+        assert!(local.removed.contains(OsStr::new("CODEX_API_KEY")));
+        assert!(local.removed.contains(OsStr::new("OPENAI_API_KEY")));
+
+        let environment =
+            codex_environment_child(Path::new(r"C:\wren-home"), Path::new(r"C:\codex-home"));
+        assert!(!environment.removed.contains(OsStr::new("CODEX_API_KEY")));
+        assert_eq!(
+            environment.values.get(OsStr::new("CODEX_HOME")),
+            Some(&OsString::from(r"C:\codex-home"))
+        );
     }
 }

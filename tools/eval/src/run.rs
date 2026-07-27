@@ -11,6 +11,7 @@ use wren_test_support::{
 };
 
 use crate::{
+    codex,
     harness::{HarnessConfig, LoadedHarness},
     pi,
     schema::{
@@ -47,10 +48,10 @@ pub struct RunOptions {
 }
 
 pub fn run(repository: &Path, options: &RunOptions) -> io::Result<bool> {
-    if options.attempts == 0 || options.harness_kind != "pi" {
+    if options.attempts == 0 || !matches!(options.harness_kind.as_str(), "pi" | "codex") {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "run requires pi and a positive attempt count",
+            "run requires pi or codex and a positive attempt count",
         ));
     }
     let task = Task::load(&repository.join("evals/tasks"), &options.task_id)?;
@@ -157,8 +158,14 @@ fn run_attempt(
     fs::create_dir(&attempt_staging)?;
     atomic_write(&attempt_staging.join("prompt.txt"), &task.prompt)?;
 
-    let arguments = pi::arguments(config)?;
-    let environment = Ok::<_, io::Error>(pi::environment(config, &isolated));
+    let arguments = match config {
+        HarnessConfig::Pi { .. } => pi::arguments(config)?,
+        HarnessConfig::Codex { .. } => codex::arguments(config, isolated.workspace())?,
+    };
+    let environment = match config {
+        HarnessConfig::Pi { .. } => Ok(pi::environment(config, &isolated)),
+        HarnessConfig::Codex { .. } => codex::environment(config, &isolated),
+    };
     let stdout_path = attempt_staging.join("harness.jsonl");
     let stderr_path = attempt_staging.join("harness.stderr.txt");
     let (mut infrastructure_failure, process) = match environment {
@@ -193,7 +200,10 @@ fn run_attempt(
 
     let normalized = if infrastructure_failure.is_none() {
         let bytes = fs::read(&stdout_path)?;
-        let result = pi::normalize(&bytes);
+        let result = match config {
+            HarnessConfig::Pi { .. } => pi::normalize(&bytes),
+            HarnessConfig::Codex { .. } => codex::normalize(&bytes),
+        };
         match result {
             Ok(transcript) => Some(transcript),
             Err(error) => {
