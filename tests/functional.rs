@@ -1,32 +1,41 @@
 use std::{
-    env, fs,
+    env,
+    ffi::OsString,
+    fs,
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::Command,
     sync::{
         OnceLock,
         atomic::{AtomicUsize, Ordering},
     },
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-static NEXT_TEMP_DIRECTORY: AtomicUsize = AtomicUsize::new(0);
-static READ_EXTENSION: OnceLock<PathBuf> = OnceLock::new();
+use wren_test_support::{
+    IsolatedWorkspace, ProcessRequest, ReleaseInstallation, TreeCleanup, environment::wren_child,
+    run_process,
+};
+
+static RELEASE_INSTALLATION: OnceLock<ReleaseInstallation> = OnceLock::new();
 static FIXTURE_EXTENSION: OnceLock<PathBuf> = OnceLock::new();
+static NEXT_CAPTURE: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
-fn harness_starts_and_stops_without_installed_extensions() {
-    let harness = HarnessInstallation::new();
-    let output = harness
-        .command()
-        .output()
-        .expect("compiled Wren harness should execute");
-
-    assert_success(&output, "");
+fn installed_release_starts_and_auto_loads_packaged_read_extension() {
+    let mut harness = HarnessInstallation::new();
+    assert_success(&harness.run(Path::new("."), []), "");
+    assert_success(
+        &harness.invoke_tool(Path::new("."), "read", r#"{"path":"Cargo.toml"}"#),
+        &fs::read_to_string("Cargo.toml")
+            .expect("Cargo.toml should be readable")
+            .replace("\r\n", "\n"),
+    );
+    harness.finish();
 }
 
 #[test]
 fn configured_extensions_support_auto_and_manual_loading() {
-    let automatic = HarnessInstallation::new();
-    automatic.install_extension("read", read_extension(), "auto");
+    let mut automatic = HarnessInstallation::new();
     assert_success(
         &automatic.invoke_tool(Path::new("."), "read", r#"{"path":"Cargo.toml"}"#),
         &fs::read_to_string("Cargo.toml")
@@ -34,8 +43,8 @@ fn configured_extensions_support_auto_and_manual_loading() {
             .replace("\r\n", "\n"),
     );
 
-    let manual = HarnessInstallation::new();
-    manual.install_extension("read", read_extension(), "manual");
+    let mut manual = HarnessInstallation::new();
+    manual.set_read_manifest_mode("manual");
     assert_error(
         &manual.invoke_tool(Path::new("."), "read", r#"{"path":"Cargo.toml"}"#),
         "unknown_tool",
@@ -53,61 +62,71 @@ fn configured_extensions_support_auto_and_manual_loading() {
         &automatic.invoke_tool(Path::new("."), "read", r#"{"path":"Cargo.toml"}"#),
         "unknown_tool",
     );
+    automatic.finish();
+    manual.finish();
 }
 
 #[test]
 fn extension_discovery_reports_configuration_installation_and_conflict_errors() {
-    let missing = HarnessInstallation::new();
+    let mut missing = HarnessInstallation::new();
     missing.write_config("[extensions]\nload = [\"missing\"]\n");
     assert_stderr_contains(
-        &missing.command().output().expect("Wren should execute"),
+        &missing.run(Path::new("."), []),
         "requested extension \"missing\" is not installed",
     );
 
-    let malformed = HarnessInstallation::new();
+    let mut malformed = HarnessInstallation::new();
     malformed.write_config("not TOML");
     assert_stderr_contains(
-        &malformed.command().output().expect("Wren should execute"),
+        &malformed.run(Path::new("."), []),
         "configuration error: could not parse",
     );
 
-    let missing_library = HarnessInstallation::new();
-    missing_library.install_extension("read", Path::new("missing.dll"), "auto");
+    let mut missing_library = HarnessInstallation::new();
+    missing_library.write_read_manifest(
+        "id = \"read\"\ngeneration = \"missing\"\nlibrary = \"generations/missing/missing.dll\"\nmode = \"auto\"\n",
+    );
     assert_stderr_contains(
-        &missing_library
-            .command()
-            .output()
-            .expect("Wren should execute"),
+        &missing_library.run(Path::new("."), []),
         "could not load extension \"read\"",
     );
 
-    let conflicting = HarnessInstallation::new();
-    conflicting.install_extension("read", read_extension(), "auto");
-    conflicting.install_extension("functional-test-fixture", fixture_extension(), "auto");
+    let mut conflicting = HarnessInstallation::new();
+    conflicting.install_fixture_extension();
     assert_stderr_contains(
-        &conflicting.command().output().expect("Wren should execute"),
+        &conflicting.run(Path::new("."), []),
         "is registered by both extension",
     );
 
-    let removed_flag = HarnessInstallation::new()
-        .command()
-        .arg("--extension")
-        .arg(read_extension())
-        .output()
-        .expect("Wren should execute");
-    assert_stderr_contains(&removed_flag, "usage: wren [tool <name> --args <json>]");
+    let mut removed_flag = HarnessInstallation::new();
+    let read_library = removed_flag
+        .installation
+        .read_library()
+        .as_os_str()
+        .to_owned();
+    assert_stderr_contains(
+        &removed_flag.run(
+            Path::new("."),
+            [OsString::from("--extension"), read_library],
+        ),
+        "usage: wren [tool <name> --args <json>]",
+    );
+
+    missing.finish();
+    malformed.finish();
+    missing_library.finish();
+    conflicting.finish();
+    removed_flag.finish();
 }
 
 #[test]
-fn read_tool_reads_ranges_and_paths_through_the_harness() {
-    let harness = read_harness();
-    let directory = TestDirectory::new();
-    let text_path = directory.path().join("sample.txt");
+fn read_tool_reads_ranges_and_paths_through_the_installed_release() {
+    let mut harness = HarnessInstallation::new();
+    let text_path = harness.workspace().join("sample.txt");
     fs::write(&text_path, b"alpha\r\nbeta\r\ngamma\r\n").expect("text fixture should be writable");
 
     let relative = invoke_read(
         &harness,
-        directory.path(),
         serde_json::json!({"path": "sample.txt", "limit": 2}).to_string(),
     );
     assert_success(
@@ -117,16 +136,14 @@ fn read_tool_reads_ranges_and_paths_through_the_harness() {
 
     let absolute = invoke_read(
         &harness,
-        directory.path(),
         serde_json::json!({"path": text_path, "offset": 3, "limit": 20}).to_string(),
     );
     assert_success(&absolute, "gamma\n");
 
-    fs::write(directory.path().join("empty.txt"), []).expect("empty fixture should be writable");
+    fs::write(harness.workspace().join("empty.txt"), []).expect("empty fixture should be writable");
     assert_success(
         &invoke_read(
             &harness,
-            directory.path(),
             serde_json::json!({"path": "empty.txt"}).to_string(),
         ),
         "",
@@ -134,64 +151,72 @@ fn read_tool_reads_ranges_and_paths_through_the_harness() {
     assert_error(
         &invoke_read(
             &harness,
-            directory.path(),
             serde_json::json!({"path": "empty.txt", "offset": 2}).to_string(),
         ),
         "invalid_range",
     );
+    harness.finish();
 }
 
 #[test]
-fn read_tool_bounds_output_through_the_harness() {
-    let harness = read_harness();
-    let directory = TestDirectory::new();
-    fs::write(directory.path().join("many-lines.txt"), "x\n".repeat(2_001))
-        .expect("line-limit fixture should be writable");
+fn read_tool_bounds_output_through_the_installed_release() {
+    let mut harness = HarnessInstallation::new();
+    fs::write(
+        harness.workspace().join("many-lines.txt"),
+        "x\n".repeat(2_001),
+    )
+    .expect("line-limit fixture should be writable");
     let line_limited = invoke_read(
         &harness,
-        directory.path(),
         serde_json::json!({"path": "many-lines.txt"}).to_string(),
     );
-    assert!(line_limited.status.success());
+    assert!(line_limited.succeeded());
     assert!(line_limited.stdout.len() <= 50 * 1_024);
     assert!(
-        stdout(&line_limited).ends_with("[Showing lines 1-2000. Use offset=2001 to continue.]")
+        line_limited
+            .stdout_text()
+            .ends_with("[Showing lines 1-2000. Use offset=2001 to continue.]")
+    );
+    assert_success(
+        &invoke_read(
+            &harness,
+            serde_json::json!({"path": "many-lines.txt", "offset": 2001}).to_string(),
+        ),
+        "x\n",
     );
 
     let wide_lines = format!("{}\n", "a".repeat(1_000)).repeat(60);
-    fs::write(directory.path().join("many-bytes.txt"), wide_lines)
+    fs::write(harness.workspace().join("many-bytes.txt"), wide_lines)
         .expect("byte-limit fixture should be writable");
     let byte_limited = invoke_read(
         &harness,
-        directory.path(),
         serde_json::json!({"path": "many-bytes.txt"}).to_string(),
     );
-    assert!(byte_limited.status.success());
+    assert!(byte_limited.succeeded());
     assert!(byte_limited.stdout.len() <= 50 * 1_024);
-    assert!(stdout(&byte_limited).contains("Use offset="));
+    assert!(byte_limited.stdout_text().contains("Use offset="));
 
     fs::write(
-        directory.path().join("long-line.txt"),
+        harness.workspace().join("long-line.txt"),
         format!("{}\nafter\n", "é".repeat(30_000)),
     )
     .expect("long-line fixture should be writable");
     let long_line = invoke_read(
         &harness,
-        directory.path(),
         serde_json::json!({"path": "long-line.txt"}).to_string(),
     );
-    assert!(long_line.status.success());
+    assert!(long_line.succeeded());
     assert!(long_line.stdout.len() <= 50 * 1_024);
-    let long_line_stdout = stdout(&long_line);
+    let long_line_stdout = long_line.stdout_text();
     assert!(long_line_stdout.contains("[Line 1 truncated.]"));
     assert!(long_line_stdout.ends_with("[Showing lines 1-1. Use offset=2 to continue.]"));
+    harness.finish();
 }
 
 #[test]
-fn read_tool_reports_structured_errors_through_the_harness() {
-    let harness = read_harness();
-    let directory = TestDirectory::new();
-    fs::write(directory.path().join("sample.txt"), b"sample")
+fn read_tool_reports_structured_errors_through_the_installed_release() {
+    let mut harness = HarnessInstallation::new();
+    fs::write(harness.workspace().join("sample.txt"), b"sample")
         .expect("text fixture should be writable");
 
     for (arguments, kind) in [
@@ -209,112 +234,108 @@ fn read_tool_reports_structured_errors_through_the_harness() {
             "not_regular_file",
         ),
     ] {
-        assert_error(&invoke_read(&harness, directory.path(), arguments), kind);
+        assert_error(&invoke_read(&harness, arguments), kind);
     }
 
-    fs::write(directory.path().join("invalid.txt"), [0xff, 0xfe])
+    fs::write(harness.workspace().join("invalid.txt"), [0xff, 0xfe])
         .expect("invalid UTF-8 fixture should be writable");
     assert_error(
         &invoke_read(
             &harness,
-            directory.path(),
             serde_json::json!({"path": "invalid.txt"}).to_string(),
         ),
         "invalid_utf8",
     );
 
-    let locked_path = directory.path().join("locked.txt");
+    let locked_path = harness.workspace().join("locked.txt");
     fs::write(&locked_path, b"locked").expect("locked fixture should be writable");
     let locked_file = open_without_sharing(&locked_path);
     assert_error(
         &invoke_read(
             &harness,
-            directory.path(),
             serde_json::json!({"path": "locked.txt"}).to_string(),
         ),
         "permission_denied",
     );
     drop(locked_file);
 
-    let unknown = harness.invoke_tool(
-        directory.path(),
-        "unknown",
-        &serde_json::json!({}).to_string(),
+    assert_error(
+        &harness.invoke_tool(
+            harness.workspace(),
+            "unknown",
+            &serde_json::json!({}).to_string(),
+        ),
+        "unknown_tool",
     );
-    assert_error(&unknown, "unknown_tool");
+    harness.finish();
 }
 
-fn read_harness() -> HarnessInstallation {
-    let harness = HarnessInstallation::new();
-    harness.install_extension("read", read_extension(), "auto");
-    harness
-}
-
-fn read_extension() -> &'static Path {
-    READ_EXTENSION
-        .get_or_init(|| {
-            build_extension(
-                "wren-read-extension",
-                "wren_read_extension",
-                "functional-read",
-            )
-        })
-        .as_path()
+fn release_installation() -> &'static ReleaseInstallation {
+    RELEASE_INSTALLATION.get_or_init(|| {
+        let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should follow Unix epoch")
+            .as_nanos();
+        let root = repository.join("target").join(format!(
+            "functional-install-{timestamp}-{}",
+            std::process::id()
+        ));
+        ReleaseInstallation::install(&repository, &root)
+            .expect("cargo install-wren should produce a complete release installation")
+    })
 }
 
 fn fixture_extension() -> &'static Path {
     FIXTURE_EXTENSION
         .get_or_init(|| {
-            build_extension(
-                "wren-fixture-extension",
-                "wren_fixture_extension",
-                "functional-fixture",
-            )
+            let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            let target = repository.join("target").join("functional-fixture");
+            let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+            let build = Command::new(cargo)
+                .current_dir(&repository)
+                .args([
+                    "build",
+                    "--quiet",
+                    "--release",
+                    "--locked",
+                    "--package",
+                    "wren-fixture-extension",
+                    "--target-dir",
+                ])
+                .arg(&target)
+                .status()
+                .expect("fixture extension should build");
+            assert!(
+                build.success(),
+                "fixture extension build exited with {build}"
+            );
+            target.join("release").join(format!(
+                "{}wren_fixture_extension{}",
+                env::consts::DLL_PREFIX,
+                env::consts::DLL_SUFFIX
+            ))
         })
         .as_path()
 }
 
-fn build_extension(package: &str, library_name: &str, target_name: &str) -> PathBuf {
-    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let target = repository.join("target").join(target_name);
-    let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let build = Command::new(cargo)
-        .current_dir(&repository)
-        .args(["build", "--quiet", "--package", package, "--target-dir"])
-        .arg(&target)
-        .status()
-        .expect("extension should build");
-    assert!(build.success(), "extension build exited with {build}");
-
-    target.join("debug").join(format!(
-        "{}{}{}",
-        env::consts::DLL_PREFIX,
-        library_name,
-        env::consts::DLL_SUFFIX
-    ))
+fn invoke_read(harness: &HarnessInstallation, arguments: impl AsRef<str>) -> HarnessOutput {
+    harness.invoke_tool(harness.workspace(), "read", arguments.as_ref())
 }
 
-fn invoke_read(
-    harness: &HarnessInstallation,
-    working_directory: &Path,
-    arguments: impl AsRef<str>,
-) -> Output {
-    harness.invoke_tool(working_directory, "read", arguments.as_ref())
-}
-
-fn assert_success(output: &Output, expected_stdout: &str) {
+fn assert_success(output: &HarnessOutput, expected_stdout: &str) {
     assert!(
-        output.status.success(),
-        "Wren exited with {}: {}",
-        output.status,
+        output.succeeded(),
+        "Wren exited with {:?}: {}",
+        output.exit_code,
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(stdout(output), expected_stdout);
+    assert_eq!(output.stdout_text(), expected_stdout);
     assert!(output.stderr.is_empty());
 }
 
-fn assert_error(output: &Output, kind: &str) {
-    assert!(!output.status.success(), "Wren unexpectedly succeeded");
+fn assert_error(output: &HarnessOutput, kind: &str) {
+    assert!(!output.succeeded(), "Wren unexpectedly succeeded");
     assert!(
         output.stdout.is_empty(),
         "failed tools must not write stdout"
@@ -326,17 +347,13 @@ fn assert_error(output: &Output, kind: &str) {
     );
 }
 
-fn assert_stderr_contains(output: &Output, expected: &str) {
-    assert!(!output.status.success(), "Wren unexpectedly succeeded");
+fn assert_stderr_contains(output: &HarnessOutput, expected: &str) {
+    assert!(!output.succeeded(), "Wren unexpectedly succeeded");
     assert!(
         String::from_utf8_lossy(&output.stderr).contains(expected),
         "unexpected stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-}
-
-fn stdout(output: &Output) -> &str {
-    str::from_utf8(&output.stdout).expect("tool stdout should be UTF-8")
 }
 
 #[cfg(windows)]
@@ -351,92 +368,141 @@ fn open_without_sharing(path: &Path) -> fs::File {
 }
 
 struct HarnessInstallation {
-    directory: TestDirectory,
-    executable: PathBuf,
-    home: PathBuf,
+    directory: IsolatedWorkspace,
+    installation: ReleaseInstallation,
 }
 
 impl HarnessInstallation {
     fn new() -> Self {
-        let directory = TestDirectory::new();
-        let executable = directory
-            .path()
-            .join(format!("wren{}", env::consts::EXE_SUFFIX));
-        fs::copy(env!("CARGO_BIN_EXE_wren"), &executable)
-            .expect("Wren executable should be copied into its installation");
-        let home = directory.path().join("home");
-        fs::create_dir(&home).expect("Wren home should be creatable");
+        let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let directory =
+            IsolatedWorkspace::create(&repository.join("target/functional"), "scenario")
+                .expect("scenario workspace should be creatable");
+        let installation = release_installation()
+            .clone_to(&directory.root().join("installation"))
+            .expect("release installation should be clonable");
         Self {
             directory,
-            executable,
-            home,
+            installation,
         }
     }
 
-    fn command(&self) -> Command {
-        let mut command = Command::new(&self.executable);
-        command.env("WREN_HOME", &self.home);
-        command
+    fn workspace(&self) -> &Path {
+        self.directory.workspace()
     }
 
-    fn invoke_tool(&self, working_directory: &Path, name: &str, arguments: &str) -> Output {
-        self.command()
-            .current_dir(working_directory)
-            .arg("tool")
-            .arg(name)
-            .arg("--args")
-            .arg(arguments)
-            .output()
-            .expect("Wren tool command should execute")
+    fn run(
+        &self,
+        working_directory: &Path,
+        arguments: impl IntoIterator<Item = OsString>,
+    ) -> HarnessOutput {
+        let capture = NEXT_CAPTURE.fetch_add(1, Ordering::Relaxed);
+        let stdout_path = self
+            .directory
+            .artifacts()
+            .join(format!("command-{capture}.stdout.txt"));
+        let stderr_path = self
+            .directory
+            .artifacts()
+            .join(format!("command-{capture}.stderr.txt"));
+        let request = ProcessRequest {
+            program: self.installation.executable().to_owned(),
+            arguments: arguments.into_iter().collect(),
+            working_directory: working_directory.to_owned(),
+            stdin: &[],
+            environment: wren_child(self.directory.wren_home()),
+            timeout: Duration::from_secs(30),
+            stdout_path: stdout_path.clone(),
+            stderr_path: stderr_path.clone(),
+        };
+        let result = run_process(&request).expect("installed Wren process should execute");
+        assert!(!result.timed_out, "installed Wren process timed out");
+        assert_eq!(result.tree_cleanup, TreeCleanup::Clean);
+        HarnessOutput {
+            exit_code: result.exit_code,
+            stdout: fs::read(stdout_path).expect("stdout capture should be readable"),
+            stderr: fs::read(stderr_path).expect("stderr capture should be readable"),
+        }
     }
 
-    fn install_extension(&self, id: &str, library: &Path, mode: &str) {
-        let extension = self.directory.path().join("extensions").join(id);
-        let generation = extension.join("generations").join("test");
-        fs::create_dir_all(&generation).expect("extension directory should be creatable");
+    fn invoke_tool(&self, working_directory: &Path, name: &str, arguments: &str) -> HarnessOutput {
+        self.run(
+            working_directory,
+            [
+                OsString::from("tool"),
+                OsString::from(name),
+                OsString::from("--args"),
+                OsString::from(arguments),
+            ],
+        )
+    }
+
+    fn set_read_manifest_mode(&self, mode: &str) {
+        let manifest_path = self.read_manifest_path();
+        let manifest =
+            fs::read_to_string(&manifest_path).expect("read manifest should be readable");
+        let updated = manifest.replace("mode = \"auto\"", &format!("mode = {mode:?}"));
+        assert_ne!(manifest, updated, "installed read mode should be auto");
+        fs::write(manifest_path, updated).expect("read manifest should be writable");
+    }
+
+    fn write_read_manifest(&self, manifest: &str) {
+        fs::write(self.read_manifest_path(), manifest).expect("read manifest should be writable");
+    }
+
+    fn read_manifest_path(&self) -> PathBuf {
+        self.installation
+            .root()
+            .join("bin/extensions/read/extension.toml")
+    }
+
+    fn install_fixture_extension(&self) {
+        let extension = self
+            .installation
+            .root()
+            .join("bin/extensions/functional-test-fixture");
+        let generation = extension.join("generations/test");
+        fs::create_dir_all(&generation).expect("fixture generation should be creatable");
+        let library = fixture_extension();
         let library_name = library
             .file_name()
-            .expect("extension library should have a file name");
-        if library.exists() {
-            fs::copy(library, generation.join(library_name))
-                .expect("extension library should be installable");
-        }
-        let relative_library = Path::new("generations").join("test").join(library_name);
+            .expect("fixture library should have a file name");
+        fs::copy(library, generation.join(library_name))
+            .expect("fixture library should be installable");
         fs::write(
             extension.join("extension.toml"),
             format!(
-                "id = {id:?}\ngeneration = \"test\"\nlibrary = {:?}\nmode = {mode:?}\n",
-                relative_library.to_string_lossy().replace('\\', "/")
+                "id = \"functional-test-fixture\"\ngeneration = \"test\"\nlibrary = \"generations/test/{}\"\nmode = \"auto\"\n",
+                library_name.to_string_lossy()
             ),
         )
-        .expect("extension manifest should be writable");
+        .expect("fixture manifest should be writable");
     }
 
     fn write_config(&self, config: &str) {
-        fs::write(self.home.join("config.toml"), config)
+        fs::write(self.directory.wren_home().join("config.toml"), config)
             .expect("Wren configuration should be writable");
     }
-}
 
-struct TestDirectory {
-    path: PathBuf,
-}
-
-impl TestDirectory {
-    fn new() -> Self {
-        let id = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-        let path = env::temp_dir().join(format!("wren-functional-{}-{id}", std::process::id()));
-        fs::create_dir(&path).expect("test directory should be creatable");
-        Self { path }
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
+    fn finish(&mut self) {
+        self.directory
+            .finish()
+            .expect("scenario workspace should clean up");
     }
 }
 
-impl Drop for TestDirectory {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.path).expect("test directory should be removable");
+struct HarnessOutput {
+    exit_code: Option<i32>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+impl HarnessOutput {
+    fn succeeded(&self) -> bool {
+        self.exit_code == Some(0)
+    }
+
+    fn stdout_text(&self) -> &str {
+        str::from_utf8(&self.stdout).expect("tool stdout should be UTF-8")
     }
 }
