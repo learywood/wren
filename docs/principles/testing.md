@@ -57,14 +57,14 @@ Credentials do not define the boundary between functional tests and evaluations.
 - Provider integration, model-backed agent execution, and model-driven tool orchestration must have functional coverage through the real provider/model path.
 - A fake provider may support unit tests of orchestration states and error handling, but cannot establish the functional guarantee of a real provider path.
 - Authenticated functional cases should be narrow, inexpensive smoke scenarios with deterministic verifiers. Do not assert incidental natural-language phrasing.
-- Missing credentials must never be reported as a passing test. Default credentialless CI may omit explicitly authenticated cases, while an explicitly requested authenticated run must fail clearly when its required credentials are unavailable.
-- Run authenticated cases locally or in protected CI; never expose credentials to untrusted pull-request code.
-- Supply credentials through the normal production credential mechanism. Never store them in task manifests, command lines, result records, transcripts, patches, or verifier artifacts.
+- Missing credentials must never be reported as a passing test. Default CI omits explicitly authenticated cases, while an explicitly requested authenticated run must fail clearly when its required credentials are unavailable.
+- Run authenticated functional tests and behavioral evaluations locally using the user's existing production authentication. Do not place provider credentials, authenticated sessions, or model-calling workflows in CI unless a demonstrated future need justifies revisiting this policy.
+- Supply credentials through the normal production credential mechanism. The test and evaluation tooling must not become a credential or session manager. Never store secrets in task manifests, command lines, result records, transcripts, patches, or verifier artifacts.
 - Give credentials only to the process that needs them. Verifiers and unrelated harnesses should receive a scrubbed environment.
 
 For example, a future `wren exec "prompt"` functional test may require credentials when its claim is that Wren can send a prompt to a real provider, process the response, invoke a tool, and return the result. A constrained prompt and deterministic verifier can prove that complete path worked once. Repeating broader prompt-driven tasks to estimate success rate is a behavioral evaluation instead.
 
-Authenticated functional tests are required evidence for changes to the production paths they cover, but they are not part of ordinary untrusted pull-request CI. If required credentials are unavailable, stop before merging and request the required protected or human verification rather than substituting a fake path.
+Authenticated functional tests are required evidence for changes to the production paths they cover, but they run locally rather than in CI. If the required local authentication is unavailable, stop before merging and request that the user perform the run rather than substituting a fake path.
 
 ## When checks run
 
@@ -72,13 +72,12 @@ Authenticated functional tests are required evidence for changes to the producti
 |---|---|
 | Fast development loop | Relevant unit tests and affected credentialless functional tests |
 | Every push or pull request | Formatting, linting, build, all unit tests, all credentialless functional tests, evaluator validation, and complete release installation |
-| Provider or orchestration change | Relevant authenticated functional tests before merge |
-| Prompt, tool schema, permissions, or agent-behavior change | Paired repeated behavioral evaluations before merge, with results attached to the issue or pull request |
-| Protected scheduled CI | Authenticated functional tests once those suites and credentials exist |
-| Milestone or release | Complete applicable authenticated functional coverage and the compact behavioral corpus |
+| Provider or orchestration change | Relevant authenticated functional tests run locally before merge |
+| Prompt, tool schema, permissions, or agent-behavior change | Paired repeated behavioral evaluations run locally before merge, with results attached to the issue or pull request |
+| Milestone or release | Complete applicable authenticated functional coverage and the compact behavioral corpus, run locally |
 | Large benchmark | Manual execution for a concrete comparison, not routine CI |
 
-Unit tests, credentialless functional tests, installation checks, and evaluator validation are hard CI gates. Authenticated functional tests are hard requirements for applicable changes but run only in an environment allowed to hold credentials. Behavioral evaluations are initially a review gate: present the evidence and explain meaningful regressions rather than inventing a numerical threshold before normal variance is known.
+Unit tests, credentialless functional tests, installation checks, and evaluator validation are hard CI gates. Authenticated functional tests are hard requirements for applicable changes but run locally. Behavioral evaluations also run locally and are initially a review gate: present the evidence and explain meaningful regressions rather than inventing a numerical threshold before normal variance is known.
 
 ## Read tool example
 
@@ -154,7 +153,7 @@ A compact suite verifies:
 
 The existing `tests/functional.rs` covers many of these behaviors through a real Wren process. It currently uses a debug executable and manually constructs the extension installation, however, so it does not yet guarantee that `cargo install-wren` produced a working distribution.
 
-Once Wren has agent orchestration, a protected authenticated functional smoke test can prove a further production claim: a real provider-driven Wren session receives the read definition, invokes the extension, and returns its result. A highly constrained prompt and deterministic verifier prove that the provider-to-agent-to-tool-to-extension path worked end to end once.
+Once Wren has agent orchestration, a local authenticated functional smoke test can prove a further production claim: a real provider-driven Wren session receives the read definition, invokes the extension, and returns its result. A highly constrained prompt and deterministic verifier prove that the provider-to-agent-to-tool-to-extension path worked end to end once.
 
 Functional coverage guarantees that specified scenarios work through the supported Windows production path. It does not prove every boundary input, consistent model tool selection, an effective tool description, parity with Pi, or behavior outside the tested scenario.
 

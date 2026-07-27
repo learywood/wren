@@ -48,9 +48,10 @@ Credentials are a capability requirement, not a test category.
 - Keep authenticated smoke scenarios narrow, inexpensive, and deterministically verified.
 - Never pass secrets on command lines or write them to manifests, results, transcripts, patches, verifier artifacts, or logs.
 - Give provider credentials only to the process that needs them; scrub them from verifier and unrelated harness environments.
-- Do not run secrets against untrusted pull-request code.
+- Run authenticated functional tests and behavioral evaluations locally using the user's existing production authentication. Do not add provider credentials, authenticated sessions, or model-calling workflows to CI.
+- Do not make test or evaluation tooling manage or persist authentication.
 - Never count missing credentials as a pass. An explicitly requested authenticated run must fail clearly if its requirements are unavailable.
-- If applicable authenticated coverage cannot be run, stop before merge and request protected or human verification.
+- If applicable authenticated coverage cannot be run locally, stop before merge and ask the user to perform the run.
 
 A single constrained real-provider run proves that the selected production path worked once. Repeated broader tasks measuring whether the agent chooses and uses that path are behavioral evaluations.
 
@@ -73,8 +74,8 @@ For each change:
 
 1. During implementation, run relevant unit and credentialless functional tests.
 2. Before completion, run all unit tests, credentialless functional tests, repository checks, and `cargo install-wren`.
-3. For provider or orchestration changes, run applicable authenticated functional coverage in an approved environment.
-4. For agent-visible behavior changes, run the relevant before/after behavioral evaluation and baseline comparison.
+3. For provider or orchestration changes, run applicable authenticated functional coverage locally.
+4. For agent-visible behavior changes, run the relevant before/after behavioral evaluation and baseline comparison locally.
 5. Record authenticated and behavioral evidence in the issue or pull request.
 
 Load the separate `wren-performance` skill as well when the change may affect startup or another performance-sensitive runtime path.
