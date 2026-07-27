@@ -5,11 +5,13 @@
 compile_error!("wren-test-support supports Windows only");
 
 pub mod artifacts;
+pub mod command;
 pub mod environment;
 pub mod install;
 pub mod process;
 pub mod workspace;
 
+pub use command::resolve_windows_command;
 pub use environment::EnvironmentPolicy;
 pub use install::ReleaseInstallation;
 pub use process::{ProcessRequest, ProcessResult, TreeCleanup, run_process};

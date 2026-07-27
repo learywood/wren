@@ -4,6 +4,7 @@ members = [
     "crates/wren-extension",
     "extensions/read",
     "tests/fixtures/extension",
+    "tools/eval",
     "tools/install",
     "tools/perf",
     "tools/test-support",

@@ -593,6 +593,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wren-eval"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml",
+ "wren-test-support",
+]
+
+[[package]]
 name = "wren-extension"
 version = "0.1.0"
 dependencies = [

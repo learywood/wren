@@ -1,3 +1,4 @@
 [alias]
+eval = "run --quiet --locked --package wren-eval --"
 install-wren = "run --quiet --locked --package wren-install --"
 perf = "run --quiet --package wren-perf --"

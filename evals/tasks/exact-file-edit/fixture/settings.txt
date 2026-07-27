@@ -1,0 +1,3 @@
+project = wren
+release_channel = beta
+telemetry = disabled
