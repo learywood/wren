@@ -12,11 +12,24 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build
-        run: cargo build --workspace --locked
       - name: Check formatting
         run: cargo fmt --check
+      - name: Build
+        run: cargo build --workspace --locked
       - name: Lint
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - name: Run
-        run: cargo run --locked --quiet --package wren
+      - name: Test workspace packages
+        run: cargo test --workspace --locked --exclude wren
+      - name: Test Wren unit behavior
+        run: cargo test --package wren --bin wren --locked
+      - name: Test installed release functionality
+        run: cargo test --test functional --locked
+      - name: Validate evaluator mechanics
+        run: cargo eval validate
+      - name: Install complete optimized distribution
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "wren-install"
+          $env:CARGO_INSTALL_ROOT = $root
+          cargo install-wren
+          & (Join-Path $root "bin\wren.exe")
