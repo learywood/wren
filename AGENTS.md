@@ -43,6 +43,7 @@ For changes that may affect startup or performance-sensitive runtime paths:
 
 - Read an issue in full with `gh issue view <number> --json number,title,state,author,createdAt,updatedAt,body,comments,url`; review every comment in order and treat later superseding updates as authoritative. Prefer this over browser retrieval or bare `--comments`, which may query deprecated GitHub Projects fields.
 - Use GitHub issues for feature work, bug fixes, and other substantive code changes.
+- Break work into issues around independently valuable, independently verifiable outcomes rather than implementation layers. If later work is required to determine whether the current work functions, keep it in the same issue. Use code boundaries and commits for intermediate stages, and keep required evaluations within the feature's acceptance boundary as development backpressure.
 - Create a new issue before starting any new feature.
 - Small conversational tasks, including adding or modifying documentation, do not require an issue.
 - Do not create an issue solely to track a small conversational task.
