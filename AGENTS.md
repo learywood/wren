@@ -41,16 +41,22 @@ For changes that may affect startup or performance-sensitive runtime paths:
 
 ## GitHub Issues Workflow
 
-- Read an issue in full with `gh issue view <number> --json number,title,state,author,createdAt,updatedAt,body,comments,url`; review every comment in order and treat later superseding updates as authoritative. Prefer this over browser retrieval or bare `--comments`, which may query deprecated GitHub Projects fields.
 - Use GitHub issues for feature work, bug fixes, and other substantive code changes.
-- Break work into issues around independently valuable, independently verifiable outcomes rather than implementation layers. If later work is required to determine whether the current work functions, keep it in the same issue. Use code boundaries and commits for intermediate stages, and keep required evaluations within the feature's acceptance boundary as development backpressure.
 - Create a new issue before starting any new feature.
 - Small conversational tasks, including adding or modifying documentation, do not require an issue.
 - Do not create an issue solely to track a small conversational task.
 - For issue work, keep implementation scoped to the issue and link resulting work back to it.
-- Treat a request to start work on an issue as a request to complete it through implementation, validation, merge, and issue closure.
-- When human verification is required, stop before merging and clearly request that verification.
 - Open a follow-up issue rather than silently expanding scope.
+- When human verification is required, stop before merging and clearly request that verification.
+
+### Development flow
+
+- **Understand the issue:** Read the full issue with `gh issue view <number> --json number,title,state,author,createdAt,updatedAt,body,comments,url`; review every comment in order and treat later superseding updates as authoritative. Also read the repository guidance, relevant code, and existing documentation. Prefer this command over browser retrieval or bare `--comments`, which may query deprecated GitHub Projects fields.
+- **Confirm the outcome boundary:** Keep work together when later steps are required to prove it works; split only independently valuable and verifiable prerequisites. Use code boundaries and commits for intermediate stages rather than separate issues.
+- **Research before designing:** For architectural or external integrations, inspect first-party documentation and relevant reference implementations, then record findings and unresolved decisions under `/docs/research/`.
+- **Define acceptance evidence:** Update the issue from the research before coding, including production-path tests, evaluations, performance checks, and human verification where applicable.
+- **Implement with continuous backpressure:** Make the smallest vertical change and run relevant unit, installed functional, authenticated, and behavioral checks throughout development, not only afterward.
+- **Complete the issue:** Treat a request to start work as a request to run all gates, inspect evidence, commit, open and merge the pull request, attach results, and close the issue. Do not claim completion before then.
 
 ## Communication Style
 
