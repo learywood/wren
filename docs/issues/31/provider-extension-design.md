@@ -1,5 +1,7 @@
 # Provider extension design
 
+> **Issue:** [#31 — Add provider extensions with OpenAI support](https://github.com/learywood/wren/issues/31)
+>
 > **Status:** Design-review decisions are recorded below. Remaining recommendations still require explicit user approval before implementation.
 
 ## Scope and evidence boundary

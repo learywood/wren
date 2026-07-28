@@ -1,5 +1,7 @@
 # Baseline write tool design
 
+> **Issue:** [#30 — Ship a baseline write tool extension](https://github.com/learywood/wren/issues/30)
+
 ## Scope and evidence boundary
 
 This document recommends the smallest Windows-only `write` extension that satisfies issue #30. It is research and design, not an implementation plan for edit syntax, model orchestration, or filesystem containment.
