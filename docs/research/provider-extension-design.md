@@ -1,5 +1,7 @@
 # Provider extension design
 
+> **Status:** Proposal pending explicit user approval. Research findings are recorded, but the recommendations below are not resolved implementation decisions.
+
 ## Scope and evidence boundary
 
 This document recommends the smallest provider extension contract and OpenAI implementation that satisfy issue #31. It ends at provider invocation. `wren exec`, agent orchestration, tool execution, evaluator integration, sessions, credential management, and behavioral claims remain in #29.
@@ -275,12 +277,22 @@ Before merge:
 | Treat missing credentials as a skipped/passing smoke | Violates the repository testing policy |
 | Add `wren exec` now | Explicitly remains in #29 |
 
-## Resolved decisions and limitations
+## Approval checkpoint and open decisions
 
-No blocking product decision remains for implementation. The first version intentionally has:
+Implementation must not begin until the user explicitly approves or revises this proposal. The consequential recommendations awaiting approval are:
+
+1. Expose providers as indexed extension capabilities parallel to tools.
+2. Keep the native invocation ABI synchronous while the OpenAI extension uses cancellable asynchronous HTTP internally.
+3. Use a provider-neutral opaque continuation mapped to OpenAI `previous_response_id` and server-stored response state for the first version, rather than implementing stateless encrypted-reasoning replay.
+4. Bundle OpenAI as an ordinary auto-loaded extension, subject to installed startup performance evidence, rather than adding manifest capability metadata or lazy provider discovery now.
+5. Fix the production endpoint to OpenAI and support only `OPENAI_API_KEY`, with loopback endpoint injection private to tests.
+6. Choose how installed invocation is proven:
+   - **Option A (recommended):** add a generic one-call `wren provider <name> --request <json>` diagnostic command, which exercises the real executable but creates public CLI surface; or
+   - **Option B:** expose enough registry code for a test-only installed host, avoiding public CLI surface but weakening complete-process evidence and adding a library boundary primarily for tests.
+
+If approved, the first version would intentionally have:
 
 - one non-streaming response per invocation;
-- server-stored continuation through an opaque ID;
 - no retry or rate-limit policy;
 - no provider unload/reload;
 - no provider concurrency guarantee;
@@ -289,4 +301,4 @@ No blocking product decision remains for implementation. The first version inten
 - function tools only; and
 - one production authentication mechanism.
 
-Those constraints are sufficient for #29's initial agent loop and should expand only from demonstrated needs.
+Those constraints appear sufficient for #29's initial agent loop and should expand only from demonstrated needs.
