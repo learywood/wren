@@ -2,7 +2,7 @@
 
 > **Issue:** [#31 — Add provider extensions with OpenAI support](https://github.com/learywood/wren/issues/31)
 >
-> **Status:** Architecture research checkpoint. The earlier native provider-stream design is reopened; this document is not implementation approval.
+> **Status:** The Windows host-services spike passed. A revised production design still requires explicit approval.
 >
 > **Session:** Pi session `019fae21-8e7a-7ae6-b4f9-1c499dc5fa0d`, 2026-07-29.
 
@@ -103,31 +103,131 @@ SSE framing remains provider-side. This is necessary because provider behavior d
 
 Multipart uploads, WebSockets, bidirectional streaming, custom certificate APIs, provider SDK objects, and model-catalog policy are not required for issue #31. The host API can receive a new revision if a demonstrated provider later requires one of them.
 
-## Unresolved architecture questions
+## Windows native spike
 
-The host-services direction is promising but not implementation-ready. The next design must resolve:
+A disposable spike was built under ignored `target/issue-31-host-services-spike/` at Wren commit `7fda67aaf935f69eed0a490ab6f2ec60ead7d5e4`. It was not added to Wren's workspace or production code.
 
-1. the versioned `HostServices` shape and how an extension receives and retains it;
-2. whether to adopt `async-ffi` or use a smaller contract-specific future/poll wrapper under Wren's existing exact-fingerprint policy;
-3. the owned HTTP response/body handle, allocator ownership, creator-side destruction, and DLL retention rules;
-4. provider-stream polling, explicit cancellation versus drop, timeout terminal semantics, and wake behavior;
-5. whether provider streams must be `Send`, and which executor configuration Wren actually needs;
-6. bounded buffering and backpressure between Reqwest body chunks, provider parsing, and Wren event consumption;
-7. transport error categories and safe bounded diagnostics without provider semantics in the host;
-8. startup behavior and whether Tokio/Reqwest code can remain completely lazy on credentialless startup; and
-9. interaction with transactional reload and safe generation unloading in issues #25 and #26.
+Environment:
 
-## Next research task
+- Windows 11 Home build 26200;
+- Intel Core i5-1235U;
+- `rustc 1.97.1 (8bab26f4f 2026-07-14)` for `x86_64-pc-windows-msvc`;
+- `async-ffi 0.5.1`, Tokio 1.53.1, Reqwest 0.13.4, and libloading 0.9.0; and
+- a release `cdylib` loaded through the real Windows DLL boundary.
 
-Before another design-approval request:
+The spike had three crates:
 
-1. Build a disposable Windows-only architecture spike, not production code, that loads a fixture DLL and proves a host-created async operation can be awaited and woken through the DLL boundary.
-2. Compare `async-ffi` with a contract-specific opaque future/stream wrapper for safety, ownership clarity, allocations, panic behavior, and API evolution.
-3. Extend the spike to a host-owned Reqwest request against a loopback SSE server; prove response-head delivery, byte streaming, cancellation, timeout, drop, and creator-side destruction.
-4. Exercise controlled wire fixtures representative of OpenAI Responses, Anthropic Messages, OpenRouter comments/mid-stream errors, and OpenCode's mixed OpenAI/Anthropic routing. The host must remain unchanged across all fixtures.
-5. Determine the minimal timeout model from observed provider needs: response-head, first-event, idle, and overall operation deadlines.
-6. Verify that no host-owned task or waker can call unloaded extension code, and align the result with #25/#26 lifecycle plans.
-7. Measure the real installed release startup before and after lazy runtime/HTTP integration using the repository performance workflow.
-8. Return with the exact host-service and provider-stream contracts, rejected alternatives, compatibility evidence, and a revised acceptance plan for explicit approval.
+```text
+spike-host.exe
+  Tokio runtime, Reqwest client, loopback HTTP/SSE server, DLL loader
 
-Production implementation of issue #31 remains paused until that research is complete and approved.
+provider_fixture.dll
+  provider request construction, SSE parsing, event interpretation
+  no Tokio, Reqwest, Hyper, TLS, socket, or reactor dependency
+
+spike-abi
+  repr(C) request/result types, async-ffi future, opaque body handle
+```
+
+The relevant experimental boundary was:
+
+```text
+HostServices { context, send_request }
+
+send_request(HttpRequest)
+  -> async-ffi FfiFuture<HeadResult>
+
+HeadResult
+  -> status + headers + HostBody
+
+HostBody
+  -> poll_next(handle, FfiContext)  // contract-specific direct poll
+  -> next_future(handle)            // async-ffi comparison path
+  -> cancel(handle)
+  -> drop(handle)                    // creator-side destructor
+```
+
+Request values were copied synchronously before the host-created future was returned. Host-created response headers and chunks carried host destructor callbacks. The provider-created final result carried a provider-DLL destructor callback. A wrapper retained `Arc<Library>` until the provider future was dropped.
+
+### Evidence
+
+| Claim | Spike evidence |
+|---|---|
+| A host future can run through a provider DLL on Wren's runtime | The DLL awaited a host-created Reqwest future while its outer provider future was polled by the host Tokio executor. Delayed network chunks woke the task through both async-FFI boundaries. |
+| Providers do not need a runtime or HTTP client | `cargo tree -p provider-fixture` contained only `async-ffi`, `serde_json`, and `spike-abi`; Tokio and Reqwest appeared only under `spike-host`. |
+| Response heads and streaming bodies cross the ABI | The DLL checked status and response headers, then consumed deliberately fragmented chunked HTTP bodies through both body-poll variants. |
+| Provider-neutral transport supports the target protocols | Controlled SSE fixtures covered OpenAI Responses, Anthropic named events and pings, OpenRouter comments and mid-stream errors, OpenAI-compatible Chat Completions, and OpenCode's mixed Chat/Anthropic routing. Provider parsing changed; the host did not. |
+| Cancellation wakes pending work | Host-side cancellation woke a DLL future blocked in body polling, produced a cancellation terminal, dropped the unfinished Reqwest body, and caused the server to observe disconnect. |
+| Timeouts require phases | Separate response-head and body-byte-idle timeouts both produced deterministic terminals. An overall timer was carried by the body state but its expiry path was not separately exercised. |
+| Drop cancels unfinished work | Aborting the host task dropped the DLL future, which invoked the host future's creator-side destructor and disconnected a request waiting for response headers. |
+| Panics need explicit policy | `async-ffi` caught a DLL future poll panic and re-raised it in the host task; Tokio contained it as a failed task. A custom body callback used `catch_unwind` to convert an injected panic into a typed terminal. Neither path silently crossed the C ABI. |
+| A generation must remain loaded | Deleting the copied DLL failed while an in-flight provider future retained it. After aborting and dropping that future, Windows allowed immediate DLL deletion. |
+| Creator-side allocation ownership works | Every body handle and host byte buffer was destroyed by host callbacks; every provider result was destroyed by a DLL callback. No allocator was used to free another module's allocation. |
+
+The complete executable passed ten consecutive release runs. Every run covered twelve semantic cases—six protocols through each of two body-poll variants—plus cancellation, response-head timeout, idle timeout, pending-future drop, both panic paths, and unload retention. Representative counters were:
+
+```json
+{
+  "semantic_cases": 12,
+  "body_drops": 15,
+  "per_chunk_ffi_futures": 24,
+  "direct_poll_calls": 92,
+  "send_future_drops": 18,
+  "server_disconnects_observed": 5,
+  "dll_generation_pinned_until_future_drop": "passed"
+}
+```
+
+Expected panic hooks wrote diagnostics during the two contained panic cases; all spike processes still exited successfully.
+
+### `async-ffi` versus direct polling
+
+| Concern | `async-ffi` future per operation | Contract-specific direct `poll_next` |
+|---|---|---|
+| Waker correctness | Supplies an existing reviewed `FfiContext` and waker bridge | Should reuse `async-ffi::FfiContext`; independently recreating its waker machinery adds avoidable unsafe code |
+| Allocation | `into_ffi` allocates once per wrapped future; the comparison made 24 extra per-chunk futures | No future allocation per body poll; returned chunks still require owned buffers |
+| Panic behavior | Catches poll panic, crosses a `Panicked` marker, then re-panics in the consumer; drop or waker-vtable panic aborts | Every callback must catch panic itself and return a terminal; missing one would permit undefined behavior |
+| Ownership | Built-in creator-side future destructor | Explicit opaque-handle destructor and one-in-flight-poll rule are required |
+| Evolution | Has its own ABI version, which Wren must include in the extension fingerprint | Wren controls the small stream ABI and can revise it with the extension API |
+| Best use | One future at a coarse async boundary | Repeated body and provider-event stream polling |
+
+The recommended production direction is therefore a hybrid: use `async-ffi` once at coarse future boundaries, reuse its `FfiContext` for Wren-owned direct stream poll callbacks, and do not allocate an `FfiFuture` for every HTTP chunk or provider event. A wholly custom waker implementation is not justified by the spike.
+
+### Conclusions and remaining boundaries
+
+The spike resolves the feasibility question: one Wren-owned Tokio/Reqwest layer can perform asynchronous streaming HTTP for a native provider DLL in one process. It also establishes required invariants:
+
+- Every cross-module allocation has a creator-side destructor.
+- Every future or stream that may call DLL code pins its extension generation.
+- Cancellation is explicit and drop is also cancellation.
+- Body polling is serial and pull-based; Wren must not place an unbounded queue between Reqwest and the provider.
+- Transport timeouts distinguish response head, body-byte idle, and overall duration.
+- SSE and provider errors stay in the extension.
+
+The spike deliberately used `cancel_all` to stimulate host cancellation. Production needs a request-scoped cancellation handle so cancelling one turn cannot affect unrelated requests.
+
+A byte-idle deadline is not a provider first-event deadline: SSE comments and pings count as bytes but may not count as meaningful provider progress. The revised design must decide whether a generic host timer service or harness-level provider deadline supplies first-event timing without teaching HTTP about SSE.
+
+The spike did not establish:
+
+- the outward incremental `ProviderEvent` stream ABI; the spike returned one final normalized fixture result, although its polling and wake path is the same mechanism;
+- production buffer limits, transport error taxonomy, retry policy, or diagnostic redaction;
+- cross-origin redirect stripping, proxy behavior, real TLS endpoints, or authenticated provider behavior;
+- safe panic handling for destructors and waker callbacks beyond `async-ffi`'s process-abort policy;
+- whether provider futures and streams must be `Send` under Wren's final executor configuration; or
+- startup cost, because Tokio and Reqwest were not linked into the Wren executable. Performance comparison is required when a production candidate exists, not against this ignored standalone executable.
+
+## Revised design checkpoint
+
+Before implementation, the issue still needs an explicitly approved design that defines:
+
+1. the versioned `HostServices` function table and exact request, head, body, buffer, error, timer, and cancellation types;
+2. the incremental provider-event stream using the same direct-poll/context pattern;
+3. request-scoped cancellation, terminal ordering, one-in-flight-poll enforcement, and `Send` requirements;
+4. extension-generation retention across futures, body handles, provider streams, wakers, cancellation callbacks, and transactional reload;
+5. bounded request, response-header, chunk, collected-body, provider-event, and diagnostic sizes;
+6. redirect-sensitive-header, proxy, TLS, retry, timeout, and redaction policies;
+7. controlled fixture, real installed release, authenticated OpenAI, unload/reload, and failure-path acceptance evidence; and
+8. lazy startup implementation followed by the repository Hyperfine comparison before merge.
+
+Production implementation of issue #31 remains paused pending that approval.

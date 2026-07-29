@@ -4,7 +4,7 @@
 >
 > **Status:** Architecture reopened. The native async-runtime direction below is not approved for implementation; see [Provider host-services research](provider-host-services-research.md).
 
-The original provider contract and Pi-alignment findings remain useful historical rationale, but the assumption that a provider DLL owns or directly participates in async HTTP execution is under review. Production implementation is paused pending the host-services research and a revised design approval.
+The original provider contract and Pi-alignment findings remain useful historical rationale, but its async HTTP assumption is superseded by the completed [Windows host-services spike](provider-host-services-research.md#windows-native-spike). Production implementation is paused pending a revised design approval.
 
 ## Scope and evidence boundary
 
@@ -362,7 +362,7 @@ Before merge:
 
 ## Superseded approval checkpoint
 
-This checkpoint is retained as history. The native polling and runtime direction was reopened on 2026-07-29; the current unresolved work is recorded in [Provider host-services research](provider-host-services-research.md).
+This checkpoint is retained as history. The native polling and runtime direction was reopened on 2026-07-29; the host-services spike findings and current unresolved work are recorded in [Provider host-services research](provider-host-services-research.md).
 
 The following directions were explicitly decided in the earlier design review:
 
