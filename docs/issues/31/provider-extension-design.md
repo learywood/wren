@@ -2,7 +2,9 @@
 
 > **Issue:** [#31 — Add provider extensions with OpenAI support](https://github.com/learywood/wren/issues/31)
 >
-> **Status:** Design-review decisions are recorded below. Remaining recommendations still require explicit user approval before implementation.
+> **Status:** Architecture reopened. The native async-runtime direction below is not approved for implementation; see [Provider host-services research](provider-host-services-research.md).
+
+The original provider contract and Pi-alignment findings remain useful historical rationale, but the assumption that a provider DLL owns or directly participates in async HTTP execution is under review. Production implementation is paused pending the host-services research and a revised design approval.
 
 ## Scope and evidence boundary
 
@@ -358,9 +360,11 @@ Before merge:
 | Treat missing credentials as skipped/passing authentication evidence | Violates repository testing policy |
 | Add `wren exec` in #31 | The agent command and tool loop remain together in #29 |
 
-## Remaining approval checkpoint
+## Superseded approval checkpoint
 
-The following directions were explicitly decided in design review:
+This checkpoint is retained as history. The native polling and runtime direction was reopened on 2026-07-29; the current unresolved work is recorded in [Provider host-services research](provider-host-services-research.md).
+
+The following directions were explicitly decided in the earlier design review:
 
 - Pi is the provider capability reference.
 - The provider system is asynchronous and streaming from its first revision.
@@ -368,9 +372,4 @@ The following directions were explicitly decided in design review:
 - Duplicate provider names are rejected.
 - Providers are internal capabilities; no raw provider-invocation CLI is added.
 
-Before implementation, the user should review and explicitly approve any remaining consequential details, particularly:
-
-- the precise native polling/ownership representation for `ProviderStreamInstance`;
-- the minimal model/provider metadata retained in API revision 3;
-- the auto-load installation choice after considering its measured startup implications; and
-- the release integration-test host as the authenticated evidence boundary before `wren exec` exists.
+These earlier open details are not sufficient for implementation approval. The host-services boundary, async ABI, lifecycle, provider compatibility, and revised acceptance evidence must now be resolved first.
