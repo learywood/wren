@@ -2,7 +2,7 @@
 
 > **Issue:** [#31 — Add provider extensions with OpenAI support](https://github.com/learywood/wren/issues/31)
 >
-> **Status:** The Windows host-services spike passed. Post-spike review simplified the recommended production direction to a fixed provider executor and shared network service; the exact contract still requires explicit approval.
+> **Status:** The Windows host-services spike passed. Post-spike review simplified the recommended production direction to a fixed extension executor and shared network service; the exact [provider executor design proposal](provider-executor-design.md) requires explicit approval.
 >
 > **Session:** Pi session `019fae21-8e7a-7ae6-b4f9-1c499dc5fa0d`, 2026-07-29.
 
@@ -262,4 +262,4 @@ Before implementation, the approved design still needs to specify:
 6. narrow redirect, retry, proxy, TLS, timeout, and credential-redaction policy without provider semantics in the host; and
 7. controlled fixture, installed release, authenticated OpenAI, cancellation, unload/reload, startup-performance, and failure-path acceptance evidence.
 
-Production implementation of issue #31 remains paused pending approval of that exact contract.
+The resulting exact contract and acceptance proposal is recorded in [Provider executor design proposal](provider-executor-design.md). Production implementation of issue #31 remains paused pending its approval.

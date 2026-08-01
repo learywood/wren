@@ -2,9 +2,9 @@
 
 > **Issue:** [#31 — Add provider extensions with OpenAI support](https://github.com/learywood/wren/issues/31)
 >
-> **Status:** Architecture reopened. The native async-runtime direction below is superseded; see the [post-spike simplification](provider-host-services-research.md#post-spike-simplification).
+> **Status:** Architecture reopened. The native async-runtime direction below is superseded; see the exact [provider executor design proposal](provider-executor-design.md).
 
-The original provider contract and Pi-alignment findings remain useful historical rationale. The current recommendation uses a fixed reusable provider executor, synchronous DLL invocation, a shared Wren-owned network service, and bounded event delivery to a responsive frontend. Production implementation is paused pending approval of the exact revised contract.
+The original provider contract and Pi-alignment findings remain useful historical rationale. The current proposal uses a fixed reusable extension executor, synchronous DLL invocation, a shared Wren-owned network service, and bounded event delivery to a responsive frontend. Production implementation is paused pending explicit approval of that proposal.
 
 ## Scope and evidence boundary
 
