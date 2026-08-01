@@ -2,9 +2,9 @@
 
 > **Issue:** [#31 — Add provider extensions with OpenAI support](https://github.com/learywood/wren/issues/31)
 >
-> **Status:** Architecture reopened. The native async-runtime direction below is not approved for implementation; see [Provider host-services research](provider-host-services-research.md).
+> **Status:** Architecture reopened. The native async-runtime direction below is superseded; see the [post-spike simplification](provider-host-services-research.md#post-spike-simplification).
 
-The original provider contract and Pi-alignment findings remain useful historical rationale, but its async HTTP assumption is superseded by the completed [Windows host-services spike](provider-host-services-research.md#windows-native-spike). Production implementation is paused pending a revised design approval.
+The original provider contract and Pi-alignment findings remain useful historical rationale. The current recommendation uses a fixed reusable provider executor, synchronous DLL invocation, a shared Wren-owned network service, and bounded event delivery to a responsive frontend. Production implementation is paused pending approval of the exact revised contract.
 
 ## Scope and evidence boundary
 
@@ -13,7 +13,7 @@ Issue #31 establishes providers as production extension capabilities and impleme
 It includes:
 
 - provider registration, discovery, metadata validation, selection, conflicts, and lifecycle through the native extension registry;
-- a provider-neutral asynchronous streaming contract modeled on Pi's capability;
+- a provider-neutral streaming contract with synchronous DLL invocation and bounded frontend event delivery;
 - cancellation, timeout, assistant text, reasoning replay state, tool calls and correlated results, usage, and provider errors;
 - an ordinary bundled OpenAI extension using the Responses API, `gpt-5.6-sol`, low reasoning, and environment-provided `OPENAI_API_KEY`;
 - controlled endpoint tests, installed discovery evidence, and a narrow authenticated extension-contract smoke; and

@@ -2,7 +2,7 @@
 
 > **Issue:** [#31 — Add provider extensions with OpenAI support](https://github.com/learywood/wren/issues/31)
 >
-> **Status:** The Windows host-services spike passed. A revised production design still requires explicit approval.
+> **Status:** The Windows host-services spike passed. Post-spike review simplified the recommended production direction to a fixed provider executor and shared network service; the exact contract still requires explicit approval.
 >
 > **Session:** Pi session `019fae21-8e7a-7ae6-b4f9-1c499dc5fa0d`, 2026-07-29.
 
@@ -191,43 +191,75 @@ Expected panic hooks wrote diagnostics during the two contained panic cases; all
 | Evolution | Has its own ABI version, which Wren must include in the extension fingerprint | Wren controls the small stream ABI and can revise it with the extension API |
 | Best use | One future at a coarse async boundary | Repeated body and provider-event stream polling |
 
-The recommended production direction is therefore a hybrid: use `async-ffi` once at coarse future boundaries, reuse its `FfiContext` for Wren-owned direct stream poll callbacks, and do not allocate an `FfiFuture` for every HTTP chunk or provider event. A wholly custom waker implementation is not justified by the spike.
+The spike initially suggested a hybrid async ABI. Subsequent review rejected that as unnecessary production complexity: Wren can preserve a responsive frontend and streaming without exposing any future, waker, or async stream through the DLL contract.
 
-### Conclusions and remaining boundaries
+## Post-spike simplification
 
-The spike resolves the feasibility question: one Wren-owned Tokio/Reqwest layer can perform asynchronous streaming HTTP for a native provider DLL in one process. It also establishes required invariants:
+The current recommendation separates three execution contexts:
 
-- Every cross-module allocation has a creator-side destructor.
-- Every future or stream that may call DLL code pins its extension generation.
-- Cancellation is explicit and drop is also cancellation.
-- Body polling is serial and pull-based; Wren must not place an unbounded queue between Reqwest and the provider.
-- Transport timeouts distinguish response head, body-byte idle, and overall duration.
-- SSE and provider errors stay in the extension.
+```text
+Wren frontend/event loop
+  submits provider jobs; receives events, completion, and cancellation
 
-The spike deliberately used `cancel_all` to stimulate host cancellation. Production needs a request-scoped cancellation handle so cancelling one turn cannot affect unrelated requests.
+Fixed provider executor
+  one lazy, reusable OS thread; invokes provider DLL synchronously
 
-A byte-idle deadline is not a provider first-event deadline: SSE comments and pings count as bytes but may not count as meaningful provider progress. The revised design must decide whether a generic host timer service or harness-level provider deadline supplies first-event timing without teaching HTTP about SSE.
+Shared network service
+  one lazy Wren-owned Tokio/Reqwest runtime; owns every HTTP operation
+```
 
-The spike did not establish:
+This is not one thread per request. The provider executor is reused across calls. Issue #31 requires only one active provider turn at a time; if demonstrated future concurrency requires more, its internal executor can become a small bounded pool without changing the frontend, extension, event, cancellation, or HTTP contracts.
 
-- the outward incremental `ProviderEvent` stream ABI; the spike returned one final normalized fixture result, although its polling and wake path is the same mechanism;
-- production buffer limits, transport error taxonomy, retry policy, or diagnostic redaction;
-- cross-origin redirect stripping, proxy behavior, real TLS endpoints, or authenticated provider behavior;
-- safe panic handling for destructors and waker callbacks beyond `async-ffi`'s process-abort policy;
-- whether provider futures and streams must be `Send` under Wren's final executor configuration; or
-- startup cost, because Tokio and Reqwest were not linked into the Wren executable. Performance comparison is required when a production candidate exists, not against this ignored standalone executable.
+The extension-facing call remains synchronous and runs only on the provider executor:
 
-## Revised design checkpoint
+```text
+Provider::invoke(request, host_services, event_sink) -> ProviderResult
+```
 
-Before implementation, the issue still needs an explicitly approved design that defines:
+During that call:
 
-1. the versioned `HostServices` function table and exact request, head, body, buffer, error, timer, and cancellation types;
-2. the incremental provider-event stream using the same direct-poll/context pattern;
-3. request-scoped cancellation, terminal ordering, one-in-flight-poll enforcement, and `Send` requirements;
-4. extension-generation retention across futures, body handles, provider streams, wakers, cancellation callbacks, and transactional reload;
-5. bounded request, response-header, chunk, collected-body, provider-event, and diagnostic sizes;
-6. redirect-sensitive-header, proxy, TLS, retry, timeout, and redaction policies;
-7. controlled fixture, real installed release, authenticated OpenAI, unload/reload, and failure-path acceptance evidence; and
-8. lazy startup implementation followed by the repository Hyperfine comparison before merge.
+1. The provider constructs its endpoint, headers, and JSON and calls blocking `host_services.http_start`.
+2. The host copies the request and submits it to its network runtime.
+3. The provider executor waits for the response head, then pulls bytes with blocking `body_next` calls.
+4. A capacity-one host channel between Reqwest and `body_next` bounds buffering and applies backpressure.
+5. The provider parses SSE and emits normalized events through a synchronous sink that only enqueues host-owned events; it never calls frontend code directly.
+6. The frontend consumes those events independently and remains responsive.
+7. Completion or cancellation returns from the synchronous DLL invocation before Wren releases that extension generation.
 
-Production implementation of issue #31 remains paused pending that approval.
+Cancellation belongs to the provider job, not the extension. Every host HTTP operation created during the job inherits its cancellation token. Cancelling the job aborts Reqwest, sends a cancellation terminal through the body channel, wakes the provider executor, and lets the DLL call return. Dropping an unfinished host body has the same transport-cancellation effect.
+
+Host network tasks retain no DLL pointers, callbacks, futures, or wakers. All calls into the DLL occur on the provider executor, and all calls from the DLL into host services are synchronous. Safe generation unloading therefore reduces to retaining the generation for the invocation and releasing it only after the executor returns.
+
+### Decisions simplified by this model
+
+The production design does not need:
+
+- `async-ffi`;
+- cross-DLL futures, wakers, async streams, or `Send` requirements;
+- one worker thread per request;
+- a blocked frontend thread;
+- an opaque asynchronous provider-event stream;
+- provider-managed runtimes or HTTP clients; or
+- a separate provider process.
+
+The spike remains useful evidence for the underlying host-owned transport, streaming, cancellation, ownership, and Windows unload behavior. Its async ABI was an experiment, not a requirement to carry into production.
+
+### Relationship to references
+
+This preserves the transport/provider split demonstrated by Codex, Rig, Pi, and `pi_agent_rust`: shared infrastructure owns generic HTTP bytes, while providers own request and event semantics. The fixed executor is only Wren's native-DLL adapter. Those references do not need one because their provider implementations already share a language runtime or are statically linked.
+
+Compared with a fully shared async runtime, the executor serializes provider invocations in issue #31. That is an intentional simplification for Wren's current sequential agent workload. The network service remains asynchronous and can multiplex operations; frontend responsiveness and streamed events do not depend on provider-call concurrency.
+
+## Remaining exact design work
+
+Before implementation, the approved design still needs to specify:
+
+1. the versioned synchronous `HostServices`, host-body, provider invocation, event-sink, buffer, and creator-side destructor types;
+2. the provider job's event, completion, overall-deadline, and request-scoped cancellation behavior;
+3. bounded request, response-header, body-chunk, queued-event, final-response, and diagnostic sizes;
+4. terminal ordering, event-sink backpressure, provider panic conversion, and cancellation while parsing or emitting;
+5. lazy provider-executor and network-service startup and shutdown, plus generation retention during reload;
+6. narrow redirect, retry, proxy, TLS, timeout, and credential-redaction policy without provider semantics in the host; and
+7. controlled fixture, installed release, authenticated OpenAI, cancellation, unload/reload, startup-performance, and failure-path acceptance evidence.
+
+Production implementation of issue #31 remains paused pending approval of that exact contract.
