@@ -1,12 +1,12 @@
 # Provider executor design proposal
 
-> **Issue:** [#31 — Add provider extensions with OpenAI support](https://github.com/learywood/wren/issues/31)
+> **Issue:** [#31 — Add provider extensions and one-turn model execution](https://github.com/learywood/wren/issues/31)
 >
-> **Status:** Proposed after the Windows host-services spike and post-spike simplification. Production code must not change until this exact direction is approved.
+> **Status:** Revised proposal. Issue #31 now ends at an installed one-turn `wren exec` path; production code must not change until the remaining exact command and JSONL contract is approved.
 
 ## Outcome
 
-Wren will expose providers as native extension capabilities while keeping the frontend responsive, keeping all networking in one Wren-owned service, and keeping futures and wakers out of the DLL contract.
+Wren will expose providers as native extension capabilities and consume them through an installed one-turn `wren exec` command, while keeping the frontend responsive, keeping all networking in one Wren-owned service, and keeping futures and wakers out of the DLL contract.
 
 The production path has three components:
 
@@ -33,7 +33,7 @@ A `ProviderJob` owns:
 - request-scoped cancellation; and
 - the completion represented by exactly one terminal event.
 
-The receiver supports blocking consumption for the current command/test hosts and asynchronous consumption by a future Tokio frontend. The provider executor blocks only when the bounded event queue is full; it never calls frontend code directly.
+The initial host uses a bounded `crossbeam-channel` queue. The sink selects between sending the next event and job cancellation, so cancellation wakes a producer blocked by a full queue. `wren exec` drains the receiver while writing JSONL; a future interactive frontend can select or poll the same receiver without running provider code on its event thread. The provider executor never calls frontend code directly.
 
 Issue #31 permits one active provider invocation at a time. This matches Wren's sequential agent turn and lets the same thread retain ordinary mutable extension semantics. If demonstrated future work requires concurrent sessions, Wren may shard extension instances or add owned call objects behind `ExtensionHost`; the provider, event, HTTP, and frontend job contracts do not change.
 
@@ -116,7 +116,7 @@ Content indexes preserve provider order. End events contain finalized content an
 
 `EmitControl` is `Continue` or `Stop`. The host returns `Stop` after cancellation, a sequence/limit violation, receiver closure, or a terminal event. The provider must then return without further events.
 
-The host enforces start-before-content, matching start/delta/end kinds and indexes, one active item at a time, and exactly one terminal event. Safely retained partial events remain available before an error terminal; error values do not duplicate them.
+The host enforces start-before-content, matching start/delta/end kinds by content index, and exactly one terminal event. Multiple indexed items may be in progress when the provider protocol permits it. Safely retained partial events remain available before an error terminal; error values do not duplicate them.
 
 The event queue holds at most 64 events. A single event may contain at most 1 MiB of text/JSON, and total finalized provider content may not exceed 16 MiB. Diagnostics are truncated to 8 KiB after redaction.
 
@@ -174,7 +174,7 @@ Every `ProviderJob` owns one cancellation token. Every exchange started through 
 
 Dropping `ProviderJob` cancels it. Dropping an unfinished exchange cancels that exchange without affecting other jobs.
 
-The public provider call has one overall deadline. Expiry follows the same path but terminates as `timeout`, not `aborted`. The first revision has no provider-selectable response-head, byte-idle, or first-meaningful-event timer. Reqwest has a 30-second connection timeout; the overall deadline governs response and stream duration.
+The public provider call has an optional overall deadline. `wren exec --timeout <seconds>` accepts a positive integer number of seconds; omitting it applies no Wren overall deadline. Expiry follows the cancellation path but terminates as `timeout`, not `aborted`. Zero, fractions, and invalid values are rejected. The first revision has no provider-selectable response-head, byte-idle, or first-meaningful-event timer. Controlled Rust tests may use finer durations without exposing that precision in the CLI.
 
 ## Transport and credential policy
 
@@ -217,10 +217,37 @@ The ordinary bundled `openai` extension exposes provider `openai` and owns:
 
 Initialization reads no credential, creates no runtime/client, and performs no network access. Invocation uses `gpt-5.6-sol`, low reasoning, complete stateless replay, function definitions/results correlated by call ID, encrypted reasoning replay, and normalized Pi-compatible usage.
 
+## One-turn command boundary
+
+Issue #31 adds the real installed command:
+
+```text
+wren exec --provider <name> --model <id> --reasoning low [--timeout <seconds>]
+```
+
+The prompt is read from stdin, never argv. `--provider`, `--model`, and `--reasoning` are explicit; an empty value is rejected. The command sends no tool definitions and performs one provider invocation. It drains normalized events into a stable forward-compatible JSONL protocol on stdout, keeps diagnostics on stderr, and exits nonzero after an error terminal. An unexpected tool call is reported as unsupported in this no-tool command rather than executed.
+
+The command is the production consumer of `ExtensionHost` and `ProviderJob`; #29 extends it with allowed tools and repeated turns rather than replacing it. There is no separate raw provider-invocation command.
+
+## Shutdown ordering
+
+Normal `ExtensionHost` shutdown:
+
+1. stops accepting jobs;
+2. cancels the active provider job, if any;
+3. wakes a full event sink and every pending HTTP exchange;
+4. waits for `Provider::invoke` to return;
+5. destroys provider and extension-owned state while its DLL remains mapped;
+6. stops and joins the network service; and
+7. joins the extension executor.
+
+Native extensions are trusted and must honor cancellation. Wren cannot safely kill a thread executing arbitrary DLL code; until #26 proves unloading, a non-returning extension blocks graceful shutdown and its generation remains mapped.
+
 ## Implementation boundary
 
 Production work is limited to:
 
+- the one-turn `wren exec` command and JSONL protocol;
 - API revision 3 provider/request/event/host-service types;
 - provider registration and dispatch;
 - the fixed extension executor and lazy host network service;
@@ -228,15 +255,15 @@ Production work is limited to:
 - installer integration; and
 - issue #31 tests and evidence.
 
-It does not add `wren exec`, an agent loop, tool orchestration, sessions, a model catalog, login UI, pricing, or behavioral evaluation. There is no shipped raw provider-invocation command. Tests use the same production `ExtensionHost` library path that #29 will consume.
+It does not add an agent/tool loop, tool orchestration, sessions, a model catalog, login UI, pricing, evaluator integration, or behavioral evaluation.
 
 ## Acceptance evidence
 
 ### Unit and controlled contract
 
-- Request and event validation, sequence state machine, limits, usage normalization, and redaction.
+- Command parsing, stdin handling, JSONL framing, request and event validation, sequence state machine, limits, usage normalization, and redaction.
 - Provider registration, selection, empty/duplicate/changed metadata, and conflicts.
-- A fixture DLL proving immediate job return, delayed streamed events, bounded backpressure, successful text/tool/usage completion, provider and malformed errors, pre-cancellation, in-flight cancellation, timeout, job drop, provider panic containment, and generation retention.
+- An installed fixture DLL proving immediate job return, delayed streamed events through `wren.exe`, bounded backpressure, successful text/usage completion, provider and malformed errors, pre-cancellation, in-flight cancellation, explicit timeout, no default timeout, job drop, provider panic containment, and generation retention.
 - Loopback HTTP proving response heads, repeated headers, split chunks, capacity-one backpressure, body drop, disconnect, and transport failures through the production network service.
 
 ### Controlled OpenAI
@@ -248,10 +275,11 @@ It does not add `wren exec`, an agent loop, tool orchestration, sessions, a mode
 ### Installed and authenticated
 
 - `cargo install-wren` packages and auto-loads the ordinary OpenAI extension without credentials or network access.
+- Installed credentialless functional tests invoke `wren.exe exec` with the fixture provider and cover CLI validation, provider selection, stdin, delayed JSONL streaming, cancellation, explicit timeout, omitted timeout, and errors.
 - Credentialless test/build children explicitly remove `OPENAI_API_KEY`.
-- An ignored local release integration smoke loads the installed DLL through production `ExtensionHost`, calls the real OpenAI endpoint with `gpt-5.6-sol` and low reasoning, verifies one fixed token, no tool calls, one success terminal, and positive consistent usage, and records no secret data.
+- An ignored local authenticated smoke invokes the installed `wren.exe exec` process, calls the real OpenAI endpoint with `gpt-5.6-sol` and low reasoning, verifies one fixed token, no tool calls, one success terminal, and positive consistent usage, and records no secret data.
 
-This release integration proves the provider boundary, not a complete `wren.exe` agent command; #29 retains that production-process claim.
+This proves one installed production model call. Tool use and repeated agent turns remain in #29.
 
 ### Final gates
 
@@ -261,7 +289,7 @@ This release integration proves the provider boundary, not a complete `wren.exe`
 - baseline/candidate startup comparison using `cargo perf compare`; and
 - nonsecret authenticated and performance evidence attached to the issue and pull request.
 
-No behavioral evaluation is required because issue #31 adds no agent command or model-driven orchestration.
+No behavioral evaluation is required because issue #31 performs one explicitly requested model call without model-driven tool orchestration; #29 owns the behavioral task and baseline.
 
 ## Alternatives and tradeoffs
 
@@ -274,7 +302,8 @@ No behavioral evaluation is required because issue #31 adds no agent command or 
 | Owned `Send` provider-call object | Could permit a worker pool, but adds another creator-owned native object and cross-thread DLL requirement before concurrent calls are demonstrated. Deferred. |
 | Separate provider process | Provides isolation but violates the required extension model and adds IPC. Rejected. |
 | Unary/nonstreaming OpenAI call | Smaller but removes incremental output and would change the provider/frontend contract when streaming is added. Rejected. |
+| Provider-only issue with a test host | Cannot demonstrate the complete installed functional path. Rejected in favor of one-turn `wren exec`. |
 
 ## Approval requested
 
-Approval authorizes this exact direction for production implementation, including the single serialized extension executor, synchronous native provider call with bounded event sink, lazy shared network service, overall-only public deadline, no redirects/retries, no raw provider CLI, and the stated limits and acceptance evidence. Requested changes should be made here before production code is edited.
+The execution, provider, HTTP, cancellation, timeout, lifetime, and acceptance direction is agreed. Before production implementation, the stable JSONL event fields and exact no-tool command error behavior must be added here and explicitly approved.
